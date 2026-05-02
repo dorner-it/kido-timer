@@ -1,21 +1,23 @@
 env    = "prod"
 region = "eu-central-1"
 
-# Cognito hosted UI subdomain. Resolves to:
-#   kido-timer.auth.eu-central-1.amazoncognito.com
 cognito_hosted_ui_domain_prefix = "kido-timer"
 
-# Both URLs are registered with Cognito; the backend picks one via
-# COGNITO_REDIRECT_URI (Lambda env var = the API Gateway URL; local dev
-# overrides via backend/.env to localhost).
+# Both URLs are registered with Cognito; backend picks one via
+# COGNITO_REDIRECT_URI (Lambda env var = the Vercel URL since the frontend
+# proxies /api/* to the API Gateway, so the cookie lands on the Vercel
+# domain).
 cognito_callback_urls = [
   "http://localhost:9000/api/auth/callback",
   "https://idr9teznt4.execute-api.eu-central-1.amazonaws.com/api/auth/callback",
+  "https://ki-do-timer-web.vercel.app/api/auth/callback",
 ]
-cognito_redirect_uri = "https://idr9teznt4.execute-api.eu-central-1.amazonaws.com/api/auth/callback"
+cognito_redirect_uri = "https://ki-do-timer-web.vercel.app/api/auth/callback"
 
-# Post-logout redirect. Vercel domain goes here once it's allocated.
 cognito_logout_urls = [
   "http://localhost:4321/",
+  "https://ki-do-timer-web.vercel.app/",
 ]
-frontend_base_url = "http://localhost:4321"
+frontend_base_url = "https://ki-do-timer-web.vercel.app"
+
+cors_allowed_origins = ["https://ki-do-timer-web.vercel.app"]

@@ -3,15 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node -e \"const f='.vercel/output/functions/_render.func/.vc-config.json'; const fs=require('fs'); fs.writeFileSync(f, fs.readFileSync(f,'utf8').replace('nodejs18.x','nodejs22.x'))\"",
     "preview": "astro preview",
     "check": "astro check && tsc --noEmit"
   },
   "dependencies": {
     "@astrojs/react": "^3.6.0",
     "@astrojs/tailwind": "^5.1.0",
+    "@astrojs/vercel": "^7.8.2",
     "@hookform/resolvers": "^3.9.0",
     "astro": "^4.16.0",
     "react": "^18.3.0",

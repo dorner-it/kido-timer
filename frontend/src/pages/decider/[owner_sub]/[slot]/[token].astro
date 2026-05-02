@@ -1,0 +1,23 @@
+---
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import DeciderPad from '../../../../components/react/DeciderPad.tsx';
+
+const { owner_sub, slot, token } = Astro.params;
+if (!owner_sub || !slot || !token) {
+  return new Response('Bad request', { status: 400 });
+}
+
+const slotNumber = Number(slot);
+if (!Number.isInteger(slotNumber) || slotNumber < 1 || slotNumber > 4) {
+  return new Response('Invalid slot', { status: 400 });
+}
+---
+
+<BaseLayout title={`Strafrichter B${slot} – KI-DO Timer`} theme="dark" bare>
+  <DeciderPad
+    ownerSub={owner_sub}
+    slot={slot}
+    token={token}
+    client:load
+  />
+</BaseLayout>

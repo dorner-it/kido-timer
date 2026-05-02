@@ -3,12 +3,27 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import LoginForm from '../components/react/LoginForm.tsx';
 ---
 
-<BaseLayout title="Anmelden – KI-DO Timer">
-  <main class="flex min-h-screen items-center justify-center px-4 py-12">
-    <div class="w-full max-w-sm rounded-xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
-      <h1 class="mb-1 text-2xl font-semibold tracking-tight">Anmelden</h1>
-      <p class="mb-6 text-sm text-slate-600">KI-DO Timer Organisator-Bereich</p>
+<BaseLayout title="Anmelden – KI-DO Timer" bare>
+  <main class="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
+    <aside
+      class="relative hidden overflow-hidden bg-ink-50 lg:flex"
+      data-theme="dark"
+    >
+      <div class="absolute inset-0 scanlines opacity-30"></div>
+      <div class="relative flex flex-1 flex-col justify-between p-12">
+        <span class="label text-ink-200">KiDo · Wettkampf-Kontrollstand</span>
+        <span
+          class="font-stencil text-[160px] font-bold leading-[0.85] tracking-tight text-ink-50/85 mix-blend-screen"
+        >
+          KI<br />DO
+        </span>
+        <p class="font-mono text-[11px] uppercase tracking-[0.22em] text-ink-200">
+          TRV Kocab · Löschangriff · Staffel · Hindernisbahn
+        </p>
+      </div>
+    </aside>
+    <section class="flex items-center justify-center p-10">
       <LoginForm client:load />
-    </div>
+    </section>
   </main>
 </BaseLayout>
