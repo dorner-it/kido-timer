@@ -1,0 +1,57 @@
+name: Build & Deploy Lambda
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-lambda.yaml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: lambda-${{ runner.arch }}-cargo-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            lambda-${{ runner.arch }}-cargo-
+
+      - name: Install cargo-lambda
+        # Pin both cargo-lambda and ziglang. Zig is what links the binary
+        # against an older glibc compatible with Lambda's provided.al2023
+        # runtime; pinning protects against an upstream regression breaking
+        # builds (mirrors the fms-monorepo workflow).
+        run: pip3 install 'cargo-lambda==1.7.0' 'ziglang==0.13.0.post1'
+
+      - name: Build Lambda package
+        working-directory: backend
+        run: cargo lambda build --release --arm64 --output-format zip
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_LAMBDA_DEPLOY_ROLE_ARN }}
+          aws-region: eu-central-1
+
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name ki-do-timer-prod \
+            --zip-file fileb://backend/target/lambda/bootstrap/bootstrap.zip \
+            > /dev/null

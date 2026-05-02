@@ -1,11 +1,21 @@
 env    = "dev"
 region = "eu-central-1"
 
-# Set once a Vercel domain is allocated. CORS is disabled while this list is empty.
-# cors_allowed_origins = ["https://app.ki-do.it"]
+# Cognito
+# Must be globally unique within the AWS region. Suggested: "auth-ki-do-it-dev".
+cognito_hosted_ui_domain_prefix = "auth-ki-do-it-dev"
 
-# Override after running `make backend-build` if the binary lives elsewhere.
-# lambda_zip_path = "../backend/target/lambda/bootstrap/bootstrap.zip"
+# Cognito callback / logout. Add the deployed API Gateway URL once known.
+# cognito_callback_urls = [
+#   "http://localhost:9000/api/auth/callback",
+#   "https://api-dev.ki-do.it/api/auth/callback",
+# ]
+# cognito_redirect_uri  = "https://api-dev.ki-do.it/api/auth/callback"
+# cognito_logout_urls   = ["https://app-dev.ki-do.it/"]
+# frontend_base_url     = "https://app-dev.ki-do.it"
+
+# CORS — provide once a Vercel domain is allocated.
+# cors_allowed_origins = ["https://app.ki-do.it", "https://app-dev.ki-do.it"]
 
 # log_level          = "info"
 # log_retention_days = 14

@@ -15,10 +15,26 @@ output "table_arn" {
   value = module.dynamodb.table_arn
 }
 
-output "jwt_signing_key_secret_arn" {
-  value = module.secrets.jwt_signing_key_secret_arn
+output "cognito_user_pool_id" {
+  value = module.cognito.user_pool_id
 }
 
-output "jwt_refresh_pepper_secret_arn" {
-  value = module.secrets.jwt_refresh_pepper_secret_arn
+output "cognito_client_id" {
+  value = module.cognito.client_id
+}
+
+output "cognito_hosted_ui_domain" {
+  value = module.cognito.hosted_ui_domain
+}
+
+output "cognito_issuer_url" {
+  value = module.cognito.issuer_url
+}
+
+output "github_actions_terraform_role_arn" {
+  value = aws_iam_role.github_actions_terraform.arn
+}
+
+output "github_actions_lambda_deploy_role_arn" {
+  value = aws_iam_role.github_actions_lambda.arn
 }

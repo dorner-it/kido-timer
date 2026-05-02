@@ -46,20 +46,22 @@ resource "aws_iam_role_policy" "ddb" {
   policy = data.aws_iam_policy_document.ddb.json
 }
 
-data "aws_iam_policy_document" "secrets" {
-  count = length(var.secret_arns) > 0 ? 1 : 0
-
+# Cognito: read the user-pool client (for the client secret used in the
+# Authorization Code exchange). Scoped to this user pool.
+data "aws_iam_policy_document" "cognito" {
   statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = var.secret_arns
+    actions = [
+      "cognito-idp:DescribeUserPoolClient",
+      "cognito-idp:RevokeToken",
+    ]
+    resources = [var.cognito_user_pool_arn]
   }
 }
 
-resource "aws_iam_role_policy" "secrets" {
-  count  = length(var.secret_arns) > 0 ? 1 : 0
-  name   = "${var.prefix}-secrets"
+resource "aws_iam_role_policy" "cognito" {
+  name   = "${var.prefix}-cognito"
   role   = aws_iam_role.lambda.id
-  policy = data.aws_iam_policy_document.secrets[0].json
+  policy = data.aws_iam_policy_document.cognito.json
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
@@ -84,10 +86,22 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      TABLE_NAME = var.table_name
-      LOG_LEVEL  = var.log_level
-      ENV        = var.env
+      TABLE_NAME           = var.table_name
+      LOG_LEVEL            = var.log_level
+      ENV                  = var.env
+      COGNITO_USER_POOL_ID = var.cognito_user_pool_id
+      COGNITO_CLIENT_ID    = var.cognito_client_id
+      COGNITO_DOMAIN       = var.cognito_hosted_ui_domain
+      COGNITO_REDIRECT_URI = var.cognito_redirect_uri
+      FRONTEND_BASE_URL    = var.frontend_base_url
     }
+  }
+
+  # GitHub Actions deploys code via aws lambda update-function-code, so
+  # subsequent Terraform runs must not revert the code to the locally-built
+  # zip.
+  lifecycle {
+    ignore_changes = [filename, source_code_hash]
   }
 
   depends_on = [

@@ -28,10 +28,34 @@ variable "table_arn" {
   type        = string
 }
 
-variable "secret_arns" {
-  description = "Secrets Manager ARNs the Lambda may read."
-  type        = list(string)
-  default     = []
+variable "cognito_user_pool_id" {
+  description = "Cognito user pool id passed to the Lambda."
+  type        = string
+}
+
+variable "cognito_user_pool_arn" {
+  description = "Cognito user pool ARN used to scope IAM."
+  type        = string
+}
+
+variable "cognito_client_id" {
+  description = "Cognito user pool client id."
+  type        = string
+}
+
+variable "cognito_hosted_ui_domain" {
+  description = "Fully qualified Cognito hosted UI domain (used by backend to redirect to login)."
+  type        = string
+}
+
+variable "cognito_redirect_uri" {
+  description = "Backend callback URL Cognito redirects to after login."
+  type        = string
+}
+
+variable "frontend_base_url" {
+  description = "Frontend base URL (used for post-login and post-logout redirects)."
+  type        = string
 }
 
 variable "cors_allowed_origins" {

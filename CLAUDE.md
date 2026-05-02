@@ -39,7 +39,7 @@ The web app does **not** talk to the timer hardware directly. It is responsible 
 | Forms            | `react-hook-form` + `zod`                                             |
 | Database         | DynamoDB, single-table design                                         |
 | Secrets          | AWS Secrets Manager (no environment-stored secrets in production)     |
-| Auth (organizer) | JWT (HS256), refresh tokens, Argon2id-hashed passwords                |
+| Auth (organizer) | AWS Cognito User Pool + Hosted UI; backend validates Cognito RS256 JWTs against JWKS and stores the session in httpOnly cookies |
 | Auth (deciders)  | Per-slot static bearer token in QR URL (rotatable)                    |
 | Auth (desktop)   | Long-lived API key per installation, stored in DynamoDB               |
 | Hosting (API)    | API Gateway HTTP API → single Lambda                                  |
@@ -164,25 +164,23 @@ ki-do-timer-web/
 ### 4.1 Entities
 
 **User (Configurator / Organizer)**
-- `id`: UUID v4
-- `email`: lowercased, unique
-- `password_hash`: Argon2id
-- `display_name`: String
-- `role`: `Organizer` (only role for now; reserve for future)
-- `api_keys`: list of long-lived keys for the desktop app (hashed in DB; only the prefix is shown after creation)
+- `id`: Cognito `sub` (UUID-shaped). The web app does NOT store passwords — Cognito owns identity.
+- `email`: lowercased, mirrored from Cognito's `email` claim on first sign-in for query convenience.
+- `display_name`: from Cognito's `name` attribute.
+- `role`: `Organizer` (only role for now; reserve for future).
+- `api_keys`: list of long-lived keys for the desktop app (Argon2id-hashed in DB; only the prefix is shown after creation). Desktop API keys are independent of Cognito and live only in DynamoDB.
 - `created_at`, `updated_at`
 
 **Competition**
 - `id`: UUID
-- `owner_id`: UUID (User)
+- `owner_id`: User id (Cognito `sub`)
 - `name`: String
 - `date`: `NaiveDate`
 - `location`: Option<String>
 - `mode`: `TimerMode` (see 4.2)
 - `is_active`: bool — exactly **zero or one** competition per user is active at a time. The decider page reads the active competition.
-- `current_run`: Option<RunRef> — which team/runner is currently on the lane (set by organizer)
+- `current_run_id`: Option<UUID> — points at the `Run` currently on the lane (set by organizer)
 - `decider_tokens`: array of 4 opaque tokens, one per slot. Used in QR URLs. Rotatable.
-- `desktop_api_keys`: list of keys with which the standalone app can pull this competition's data. (May also be inherited from the User's keys — discuss in PR.)
 - `created_at`, `updated_at`
 
 **Team**
@@ -200,34 +198,49 @@ ki-do-timer-web/
 - `birth_date`: `NaiveDate`
 - `position`: u32 (running order within team)
 
-**Penalty**
-- `id`: UUID
+**Run**
+- `id`: UUID — one row per timing result (matches the desktop app's `RunEntry` concept: a confirmed time on a lane).
 - `competition_id`: UUID
 - `team_id`: UUID
-- `runner_id`: Option<UUID> (penalties are typically per-team but optionally per-runner)
+- `runner_id`: Option<UUID> (set for `Relay` and `Individual` modes; usually `None` for `SingleLane` / `TwoLaneParallel` where the team-as-a-whole runs)
+- `run_number`: u32 (1-indexed; e.g. heat 1, heat 2 of the same team)
+- `lane`: Option<u8> (1..=2 for parallel modes; `None` otherwise)
+- `status`: enum `Pending | Active | Completed | Cancelled`. Exactly zero or one `Active` run per competition.
+- `original_time_ms`: Option<u32> — set by the desktop app on result import or manually by the organizer.
+- `correction_ms`: i32 — denormalized sum of approved penalties' `delta_ms`, kept on the run row for fast display.
+- `started_at`, `ended_at`: Option<timestamp>
+- `created_at`, `updated_at`
+
+**Penalty**
+- `id`: UUID
+- `competition_id`: UUID (denormalized for query convenience)
+- `run_id`: UUID — penalties always attach to a specific Run (a team running heat 1 vs heat 2 has separate penalty buckets).
+- `team_id`: UUID (denormalized from the run for query convenience).
+- `runner_id`: Option<UUID> (inherited from the run).
 - `decider_slot`: u8 (1..=4)
-- `delta`: i8 (typically +1; allow negative for corrections)
+- `delta_ms`: i32 — milliseconds added to the run's correction. Negative values are allowed for organizer corrections. Maps directly onto the desktop app's `RunEntry.correctionMs`.
 - `reason_code`: Option<String> (controlled vocabulary, configurable later — start with free-text optional)
 - `status`: enum `Pending | Approved | Rejected`
 - `created_at`: timestamp
 - `reviewed_at`: Option<timestamp>
-- `reviewed_by`: Option<UUID>
+- `reviewed_by`: Option<String> (Cognito `sub` of the organizer)
 
 ### 4.2 TimerMode
 
-Mirror the modes already implemented in the standalone ki-do.it timer desktop app. The web app does not need to *interpret* them — it stores the mode on the competition so the desktop app picks the right behavior on import.
+Locked v1 set (the desktop app does not yet implement modes; this is the authoritative list both sides will mirror):
 
 ```rust
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TimerMode {
-    SingleLane,
-    TwoLaneParallel,
-    Relay,
-    Individual,
-    // Extend to match the desktop app exactly. Treat the desktop app as authoritative.
+    SingleLane,        // one team on one lane, one timer running
+    TwoLaneParallel,   // two teams running simultaneously on two lanes (Löschangriff)
+    Relay,             // one team, multiple runners with handoffs (Staffellauf)
+    Individual,        // one runner at a time, individual times
 }
 ```
 
-When unsure which variants exist, **ask the user** — do not invent variants.
+Adding a variant later requires a coordinated release with the desktop app.
 
 ---
 
@@ -241,23 +254,27 @@ When unsure which variants exist, **ask the user** — do not invent variants.
 
 ### 5.1 Item Shapes
 
-| Entity              | PK                          | SK                                 | GSI1PK                       | GSI1SK                        | Attributes                                |
-|---------------------|-----------------------------|------------------------------------|------------------------------|-------------------------------|-------------------------------------------|
-| User                | `USER#<email>`              | `PROFILE`                          | `USER#<id>`                  | `PROFILE`                     | id, email, password_hash, display_name…   |
-| User API key        | `USER#<id>`                 | `APIKEY#<key_id>`                  | `APIKEY#<hash_prefix>`       | `USER#<id>`                   | hashed_key, created_at, last_used_at      |
-| Competition         | `COMP#<id>`                 | `META`                             | `USER#<owner_id>`            | `COMP#<date>#<id>`            | name, date, mode, is_active, …            |
-| Team                | `COMP#<id>`                 | `TEAM#<start_number>#<team_id>`    | —                            | —                             | name, start_number                        |
-| Runner              | `COMP#<id>`                 | `RUNNER#<team_id>#<position>`      | —                            | —                             | first_name, last_name, birth_date         |
-| Penalty             | `COMP#<id>`                 | `PENALTY#<created_at>#<id>`        | `COMP#<id>#PENALTY`          | `STATUS#<status>#<created_at>`| team_id, runner_id, decider_slot, delta…  |
-| Active marker       | `USER#<id>`                 | `ACTIVE_COMP`                      | —                            | —                             | competition_id (single item per user)     |
+| Entity              | PK                          | SK                                  | GSI1PK                       | GSI1SK                        | Attributes                                |
+|---------------------|-----------------------------|-------------------------------------|------------------------------|-------------------------------|-------------------------------------------|
+| User                | `USER#<sub>`                | `PROFILE`                           | `USER_EMAIL#<email>`         | `USER#<sub>`                  | sub, email, display_name…                 |
+| User API key        | `USER#<sub>`                | `APIKEY#<key_id>`                   | `APIKEY#<hash_prefix>`       | `USER#<sub>`                  | hashed_key, created_at, last_used_at      |
+| Competition         | `COMP#<id>`                 | `META`                              | `USER#<owner_sub>`           | `COMP#<date>#<id>`            | name, date, mode, is_active, current_run_id, … |
+| Team                | `COMP#<id>`                 | `TEAM#<start_number>#<team_id>`     | —                            | —                             | name, start_number                        |
+| Runner              | `COMP#<id>`                 | `RUNNER#<team_id>#<position>`       | —                            | —                             | first_name, last_name, birth_date         |
+| Run                 | `COMP#<id>`                 | `RUN#<run_number>#<id>`             | `COMP#<id>#RUN`              | `STATUS#<status>#<run_number>`| team_id, runner_id, lane, original_time_ms, correction_ms, started_at, ended_at |
+| Penalty             | `COMP#<id>`                 | `PENALTY#<created_at>#<id>`         | `COMP#<id>#PENALTY`          | `STATUS#<status>#<created_at>`| run_id, team_id, runner_id, decider_slot, delta_ms, reason_code |
+| OAuth state         | `OAUTH_STATE#<state>`       | `STATE`                             | —                            | —                             | code_verifier, redirect_after, ttl        |
+| Active marker       | `USER#<sub>`                | `ACTIVE_COMP`                       | —                            | —                             | competition_id (single item per user)     |
 
 ### 5.2 Access Patterns
 
-- Login: `Query PK = USER#<email>` → 1 item.
-- List competitions for organizer: `Query GSI1 PK = USER#<owner_id>, SK begins_with COMP#`.
-- Load full competition (meta + teams + runners + penalties): `Query PK = COMP#<id>` (one query, sort by SK prefix).
+- Cognito callback / first sign-in: `GetItem PK = USER#<sub>, SK = PROFILE`; create on first hit.
+- Lookup user by email (admin tooling): `Query GSI1 PK = USER_EMAIL#<email>` → 1 item.
+- List competitions for organizer: `Query GSI1 PK = USER#<owner_sub>, SK begins_with COMP#`.
+- Load full competition (meta + teams + runners + runs + penalties): `Query PK = COMP#<id>` (one query, partition by SK prefix).
 - List pending penalties: `Query GSI1 PK = COMP#<id>#PENALTY, SK begins_with STATUS#Pending#`.
-- Decider's "what's active": Read `USER#<id>/ACTIVE_COMP`, then read `COMP#<id>/META`. The decider URL contains the user-id and slot token, so we know which user.
+- Decider's "what's active": Read `USER#<sub>/ACTIVE_COMP`, then `COMP#<id>/META`, then resolve `current_run_id` to the active run row.
+- OAuth state during Cognito callback: `GetItem PK = OAUTH_STATE#<state>` (TTL-expired entries are auto-purged by DDB).
 - Desktop export: `Query PK = COMP#<id>` and filter for approved penalties only.
 
 **No scans in production code paths.** All access patterns must be Query or GetItem.
@@ -277,16 +294,18 @@ Conventions:
 - Auth header for desktop: `X-API-Key: <key>`.
 - Decider token: in URL path (see 6.3).
 
-### 6.1 Auth (organizer)
+### 6.1 Auth (organizer, Cognito)
 
-| Method | Path                  | Body / Notes                                          |
-|--------|-----------------------|-------------------------------------------------------|
-| POST   | `/api/auth/login`     | `{ email, password }` → `{ access_token, refresh_token, user }` |
-| POST   | `/api/auth/refresh`   | `{ refresh_token }` → new pair                        |
-| POST   | `/api/auth/logout`    | Invalidates refresh token (deny-list in DDB).         |
-| GET    | `/api/auth/me`        | Returns current user.                                 |
+The backend mediates the Cognito Hosted UI Authorization Code flow with PKCE. Tokens never reach the browser — the backend stores them server-side (or sets opaque httpOnly session cookies signed by the API).
 
-User registration is **not** a public endpoint in v1. Bootstrap an organizer via a Terraform-invoked one-shot script or a CLI subcommand `cargo run -- create-user`.
+| Method | Path                       | Notes                                                                 |
+|--------|----------------------------|-----------------------------------------------------------------------|
+| GET    | `/api/auth/login`          | Generate state + PKCE verifier (TTL'd in DDB), 302 to Cognito Hosted UI. |
+| GET    | `/api/auth/callback`       | Cognito redirects here with `?code&state`. Backend validates state, exchanges code for tokens with the Cognito client, sets httpOnly cookies, 302 to frontend. |
+| POST   | `/api/auth/logout`         | Clear cookies, revoke Cognito refresh token, 302 to Cognito logout endpoint, which redirects to the configured frontend logout URL. |
+| GET    | `/api/auth/me`             | Validates the session cookie's access token against Cognito JWKS and returns the current user.                          |
+
+User onboarding is **manual via the Cognito console or AWS CLI** (4 organizers max). Self-service signup is intentionally disabled at the user-pool level.
 
 ### 6.2 Configurator (organizer, JWT)
 
@@ -346,13 +365,15 @@ Export JSON shape is **stable** and versioned via top-level `"schema_version": 1
 
 ## 7. Authentication Details
 
-### 7.1 Organizer JWT
+### 7.1 Organizer Identity (Cognito)
 
-- Algorithm: **HS256**. Key from AWS Secrets Manager (`ki-do-timer/jwt-signing-key`), rotated manually.
-- Access token lifetime: **15 minutes**.
-- Refresh token lifetime: **30 days**, single-use, stored hashed in DynamoDB on refresh issue; deny-listed on logout.
-- Claims: `sub` (user id), `email`, `role`, `iat`, `exp`, `jti`.
-- Frontend stores tokens in **httpOnly, Secure, SameSite=Strict** cookies set by the API.
+- **AWS Cognito User Pool** owns identity. Web app holds zero password material.
+- **Hosted UI** in German (`Cognito > User pool > App integration > Hosted UI customisation`) handles sign-in, password reset, and lockout.
+- **Authorization Code with PKCE.** The backend Lambda is a confidential client (has a client secret, read at cold start via `cognito-idp:DescribeUserPoolClient`). It exchanges the code for `id_token` + `access_token` + `refresh_token`, validates the `id_token` against the user pool's JWKS, and persists tokens server-side keyed on a session id.
+- **Session cookie:** opaque session id, **httpOnly, Secure, SameSite=Lax** (Lax so Cognito's redirect back works), max-age = id-token lifetime.
+- **Token lifetimes** (set on the Cognito user pool client): access = id = 60 min, refresh = 30 d.
+- **Refresh** is performed transparently by the backend when an inbound request's session has an expired access token but a still-valid refresh token.
+- **Onboarding:** create users in the Cognito console / CLI; the user pool is configured with `allow_admin_create_user_only = true` and self-service signup disabled.
 
 ### 7.2 Decider Tokens
 
@@ -373,13 +394,14 @@ Export JSON shape is **stable** and versioned via top-level `"schema_version": 1
 
 Backend Lambda reads at cold start:
 
-| Source              | Purpose                                                       |
-|---------------------|---------------------------------------------------------------|
-| Env var             | `TABLE_NAME`, `AWS_REGION`, `LOG_LEVEL`, `ENV` (dev/prod)     |
-| Secrets Manager     | `ki-do-timer/<env>/jwt-signing-key`                           |
-| Secrets Manager     | `ki-do-timer/<env>/jwt-refresh-pepper` (HMAC pepper)          |
+| Source                     | Purpose                                                                |
+|----------------------------|------------------------------------------------------------------------|
+| Env var                    | `TABLE_NAME`, `AWS_REGION`, `LOG_LEVEL`, `ENV` (dev/prod)              |
+| Env var                    | `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `COGNITO_REDIRECT_URI`, `FRONTEND_BASE_URL` |
+| Cognito API at cold start  | `cognito-idp:DescribeUserPoolClient` → fetches the client secret      |
+| Cognito JWKS at runtime    | `https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/jwks.json` (cached) |
 
-**Never** put signing keys, peppers, or API keys in env vars. Pattern matches the existing AWS Lambda Rust services in this user's stack.
+**No JWT signing keys or refresh peppers** — Cognito issues tokens, we only verify them. Desktop API keys are still stored Argon2id-hashed in DynamoDB.
 
 ---
 
@@ -444,8 +466,11 @@ Provide a `compose.yaml` at repo root that runs DynamoDB Local on port 8000 for 
 
 ## 11. Deployment
 
-- Terraform provisions: DynamoDB table + GSI1, Lambda function (ARM64, runtime `provided.al2023`), API Gateway HTTP API, Secrets Manager secrets, CloudWatch Log Group, IAM least-privilege role.
+- **Same AWS account and region as `../fms/`.** Terraform reuses the existing state bucket `dorner-it-fms-terraform-state` (key `ki-do-timer/terraform.tfstate`) and lock table `fms-terraform-locks`, and the existing GitHub OIDC provider in the account.
+- Terraform provisions: DynamoDB table + GSI1, Cognito User Pool + App Client + Hosted UI domain, Lambda function (ARM64, `provided.al2023`), API Gateway HTTP API, CloudWatch Log Group, IAM least-privilege role, two GitHub Actions IAM roles (`ki-do-timer-github-actions` for Lambda deploy, `ki-do-timer-github-actions-terraform` for plan/apply).
 - Lambda binary built with `cargo lambda build --release --arm64 --output-format zip`.
+- **CI:** `.github/workflows/terraform.yaml` plans/applies on `infrastructure/**` changes. `.github/workflows/deploy-lambda.yaml` builds + uploads the Lambda zip on `backend/**` changes via `aws lambda update-function-code` (Terraform does not redeploy code, it only manages the function shape). Mirrors `../fms/` patterns.
+- **One-time bootstrap:** the two GitHub Actions roles are themselves declared in this Terraform stack, so the very first apply must be run locally with admin AWS creds. After that GitHub Actions takes over.
 - Frontend deployed to Vercel; the project ships a `vercel.json` with the API base URL as an env var per environment.
 - CORS: API Gateway allows the Vercel domain(s) only. No `*`.
 
@@ -498,12 +523,20 @@ When invoked in an empty directory with this file present:
 
 ---
 
-## 14. Open Questions to Resolve With User Before Coding
+## 14. Resolved Decisions and Remaining Open Questions
 
-- Exact list of `TimerMode` variants (mirror the desktop app — request a copy of its enum).
-- Whether penalties are per-team or per-runner in v1 (current spec: per-team, with optional runner reference).
-- Whether the desktop app fetches once and caches, or polls during the event (affects cache headers and ETag use).
-- Whether organizer onboarding needs a self-service signup, or remains CLI-only.
-- Reason-code vocabulary for penalties, or stay free-text in v1.
+### Resolved
 
-When in doubt: **ask, don't guess.**
+- **Auth:** AWS Cognito User Pool + Hosted UI. The web app holds zero password material. Confirmed 2026-05-02.
+- **TimerMode:** locked to `SingleLane | TwoLaneParallel | Relay | Individual` (§4.2). The desktop app has not yet implemented modes; both sides will mirror this list.
+- **Penalty granularity:** penalties attach to a `Run` row (a team running multiple heats has separate penalty buckets). Run mirrors the desktop app's `RunEntry` (`originalTimeMs` + `correctionMs`).
+- **AWS account & infra:** same account as `../fms/` (eu-central-1, state bucket `dorner-it-fms-terraform-state`, lock table `fms-terraform-locks`).
+- **CI:** Terraform plan/apply runs from GitHub Actions via OIDC. Lambda deploy runs from GitHub Actions on `backend/**` changes.
+- **GitHub repo:** `dorner-it/ki-do-timer-web`.
+
+### Still open
+
+- **Reason-code vocabulary** for penalties (free-text in v1; replace with controlled vocabulary later).
+- **Vercel domain(s)** for CORS and Cognito callback/logout URLs (`callback_urls` / `logout_urls`) — needed before first prod apply.
+- **Cognito Hosted UI domain prefix** — must be globally unique within the AWS region (e.g. `auth-ki-do-it`). Required input before first apply.
+- **Whether the desktop app fetches once and caches, or polls during the event** (affects cache headers and ETag use).
