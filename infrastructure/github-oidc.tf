@@ -114,6 +114,7 @@ data "aws_iam_policy_document" "github_actions_terraform" {
       "iam:TagRole",
       "iam:UntagRole",
       "iam:GetOpenIDConnectProvider",
+      "iam:ListOpenIDConnectProviders",
     ]
     resources = ["*"]
   }
