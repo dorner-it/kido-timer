@@ -7,6 +7,7 @@ pub mod oauth_state;
 pub mod penalties;
 pub mod runners;
 pub mod runs;
+pub mod sessions;
 pub mod teams;
 pub mod users;
 

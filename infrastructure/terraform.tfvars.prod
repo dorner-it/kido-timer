@@ -5,10 +5,17 @@ region = "eu-central-1"
 #   kido-timer.auth.eu-central-1.amazoncognito.com
 cognito_hosted_ui_domain_prefix = "kido-timer"
 
-# Localhost defaults are fine until a Vercel domain is allocated. Update after
-# the frontend goes live and re-apply.
-# cognito_callback_urls = ["http://localhost:9000/api/auth/callback", "https://api.ki-do.it/api/auth/callback"]
-# cognito_redirect_uri  = "https://api.ki-do.it/api/auth/callback"
-# cognito_logout_urls   = ["https://app.ki-do.it/"]
-# frontend_base_url     = "https://app.ki-do.it"
-# cors_allowed_origins  = ["https://app.ki-do.it"]
+# Both URLs are registered with Cognito; the backend picks one via
+# COGNITO_REDIRECT_URI (Lambda env var = the API Gateway URL; local dev
+# overrides via backend/.env to localhost).
+cognito_callback_urls = [
+  "http://localhost:9000/api/auth/callback",
+  "https://idr9teznt4.execute-api.eu-central-1.amazonaws.com/api/auth/callback",
+]
+cognito_redirect_uri = "https://idr9teznt4.execute-api.eu-central-1.amazonaws.com/api/auth/callback"
+
+# Post-logout redirect. Vercel domain goes here once it's allocated.
+cognito_logout_urls = [
+  "http://localhost:4321/",
+]
+frontend_base_url = "http://localhost:4321"

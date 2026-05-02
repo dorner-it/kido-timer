@@ -15,17 +15,26 @@ path = "src/main.rs"
 
 [dependencies]
 aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-cognitoidentityprovider = "1"
 aws-sdk-dynamodb = "1"
 axum = "0.8"
+axum-extra = { version = "0.10", features = ["cookie"] }
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+jsonwebtoken = "9"
 lambda_http = "0.14"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_dynamo = { version = "4", features = ["aws-sdk-dynamodb+1"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+time = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]

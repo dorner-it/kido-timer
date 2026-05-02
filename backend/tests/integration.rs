@@ -3,12 +3,12 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use ki_do_timer_backend::app::router;
+use ki_do_timer_backend::app::health_router;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_returns_ok_true() {
-    let response = router()
+    let response = health_router()
         .oneshot(
             Request::builder()
                 .uri("/api/health")
