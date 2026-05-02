@@ -1,104 +1,129 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
 use axum::Json;
-use axum::extract::{Query, State};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::extract::State;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 use crate::auth::AuthenticatedUser;
+use crate::auth::cognito::{SignInOutcome, TokenSet};
 use crate::auth::jwt;
-use crate::auth::session::{COOKIE_NAME, pkce_pair, random_token, session_ttl};
-use crate::db::{oauth_state, sessions, users};
+use crate::auth::session::{COOKIE_NAME, random_token, session_ttl};
+use crate::db::{sessions, users};
 use crate::error::{AppError, AppResult};
 use crate::models::User;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
-        .route("/login", get(login))
-        .route("/callback", get(callback))
+        .route("/sign-in", post(sign_in))
+        .route("/complete-new-password", post(complete_new_password))
         .route("/me", get(me))
         .route("/logout", post(logout))
 }
 
-#[derive(Deserialize)]
-pub struct LoginQuery {
-    /// Where to send the user after successful login. Defaults to
-    /// `FRONTEND_BASE_URL`. The value must be parseable as a URL but is not
-    /// otherwise validated — only the configured frontend should ever issue
-    /// these requests.
-    pub redirect: Option<String>,
-}
-
-pub async fn login(
-    State(state): State<AppState>,
-    Query(q): Query<LoginQuery>,
-) -> AppResult<Response> {
-    let oauth_state_token = random_token(24);
-    let (verifier, challenge) = pkce_pair();
-
-    let redirect_after = q
-        .redirect
-        .unwrap_or_else(|| state.config.frontend_base_url.clone());
-
-    oauth_state::put(&state.db, &oauth_state_token, &verifier, &redirect_after).await?;
-
-    let mut url = Url::parse(&format!(
-        "https://{}/oauth2/authorize",
-        state.cognito.hosted_ui_domain
-    ))
-    .map_err(|e| AppError::Internal(format!("authorize url: {e}")))?;
-
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", &state.cognito.client_id)
-        .append_pair("redirect_uri", &state.cognito.redirect_uri)
-        .append_pair("scope", "openid email profile")
-        .append_pair("state", &oauth_state_token)
-        .append_pair("code_challenge", &challenge)
-        .append_pair("code_challenge_method", "S256");
-
-    Ok(Redirect::to(url.as_str()).into_response())
-}
+// ===== sign-in =====
 
 #[derive(Deserialize)]
-pub struct CallbackQuery {
-    pub code: Option<String>,
-    pub state: Option<String>,
-    pub error: Option<String>,
-    pub error_description: Option<String>,
+pub struct SignInInput {
+    pub email: String,
+    pub password: String,
 }
 
-pub async fn callback(
+#[derive(Serialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum SignInResponse {
+    Authenticated { user: User },
+    NewPasswordRequired { session: String, email: String },
+}
+
+pub async fn sign_in(
     State(state): State<AppState>,
     jar: CookieJar,
-    Query(q): Query<CallbackQuery>,
+    Json(input): Json<SignInInput>,
 ) -> AppResult<Response> {
-    if let Some(err) = &q.error {
-        tracing::warn!(
-            error = %err,
-            description = ?q.error_description,
-            "Cognito callback returned an error"
-        );
-        return Err(AppError::Unauthorized);
+    let email = input.email.trim().to_lowercase();
+    if email.is_empty() || input.password.is_empty() {
+        return Err(AppError::Validation("email and password required".into()));
     }
 
-    let code = q.code.ok_or(AppError::Unauthorized)?;
-    let state_token = q.state.ok_or(AppError::Unauthorized)?;
+    match state.cognito.sign_in(&email, &input.password).await? {
+        SignInOutcome::Tokens(tokens) => {
+            let (jar, user) = open_session(&state, jar, tokens).await?;
+            Ok((jar, Json(SignInResponse::Authenticated { user })).into_response())
+        }
+        SignInOutcome::NewPasswordRequired { session } => Ok(Json(
+            SignInResponse::NewPasswordRequired { session, email },
+        )
+        .into_response()),
+    }
+}
 
-    let oauth = oauth_state::take(&state.db, &state_token)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
+// ===== complete-new-password =====
+
+#[derive(Deserialize)]
+pub struct CompleteNewPasswordInput {
+    pub email: String,
+    pub new_password: String,
+    pub session: String,
+}
+
+pub async fn complete_new_password(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Json(input): Json<CompleteNewPasswordInput>,
+) -> AppResult<Response> {
+    let email = input.email.trim().to_lowercase();
+    if email.is_empty() || input.new_password.is_empty() || input.session.is_empty() {
+        return Err(AppError::Validation(
+            "email, new_password and session required".into(),
+        ));
+    }
 
     let tokens = state
         .cognito
-        .exchange_code(&code, &oauth.code_verifier)
+        .complete_new_password(&email, &input.new_password, &input.session)
         .await?;
+    let (jar, user) = open_session(&state, jar, tokens).await?;
+    Ok((jar, Json(SignInResponse::Authenticated { user })).into_response())
+}
 
+// ===== me =====
+
+#[derive(Serialize)]
+pub struct MeResponse {
+    pub user: User,
+}
+
+pub async fn me(auth: AuthenticatedUser) -> Json<MeResponse> {
+    Json(MeResponse { user: auth.user })
+}
+
+// ===== logout =====
+
+pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
+    if let Some(cookie) = jar.get(COOKIE_NAME) {
+        let session_id = cookie.value().to_string();
+        sessions::delete(&state.db, &session_id).await?;
+    }
+
+    let mut clear = Cookie::from(COOKIE_NAME);
+    clear.set_path("/");
+    let jar = jar.remove(clear);
+
+    Ok((jar, axum::response::Redirect::to("/login")).into_response())
+}
+
+// ===== shared: token validation + session creation =====
+
+async fn open_session(
+    state: &AppState,
+    jar: CookieJar,
+    tokens: TokenSet,
+) -> AppResult<(CookieJar, User)> {
     let claims = jwt::validate_id_token(
         &tokens.id_token,
         &state.jwks,
@@ -114,7 +139,7 @@ pub async fn callback(
         .unwrap_or_else(|| claims.sub.clone());
     let email = claims.email.clone().unwrap_or_default();
 
-    users::upsert_from_claims(&state.db, &claims.sub, &email, &display_name).await?;
+    let user = users::upsert_from_claims(&state.db, &claims.sub, &email, &display_name).await?;
 
     let session_id = random_token(24);
     let ttl = session_ttl();
@@ -130,44 +155,8 @@ pub async fn callback(
     )
     .await?;
 
-    let cookie = build_session_cookie(&state, session_id);
-    let jar = jar.add(cookie);
-
-    Ok((jar, Redirect::to(&oauth.redirect_after)).into_response())
-}
-
-#[derive(Serialize)]
-pub struct MeResponse {
-    pub user: User,
-}
-
-pub async fn me(auth: AuthenticatedUser) -> Json<MeResponse> {
-    Json(MeResponse { user: auth.user })
-}
-
-pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
-    if let Some(cookie) = jar.get(COOKIE_NAME) {
-        let session_id = cookie.value().to_string();
-        if let Some(session) = sessions::get(&state.db, &session_id).await? {
-            let _ = state.cognito.revoke_refresh_token(&session.refresh_token).await;
-        }
-        sessions::delete(&state.db, &session_id).await?;
-    }
-
-    let mut clear = Cookie::from(COOKIE_NAME);
-    clear.set_path("/");
-    let jar = jar.remove(clear);
-
-    let mut url = Url::parse(&format!(
-        "https://{}/logout",
-        state.cognito.hosted_ui_domain
-    ))
-    .map_err(|e| AppError::Internal(format!("logout url: {e}")))?;
-    url.query_pairs_mut()
-        .append_pair("client_id", &state.cognito.client_id)
-        .append_pair("logout_uri", &state.config.frontend_base_url);
-
-    Ok((jar, Redirect::to(url.as_str())).into_response())
+    let cookie = build_session_cookie(state, session_id);
+    Ok((jar.add(cookie), user))
 }
 
 fn build_session_cookie(state: &AppState, session_id: String) -> Cookie<'static> {

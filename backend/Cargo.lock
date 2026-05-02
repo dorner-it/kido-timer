@@ -1427,6 +1427,7 @@ dependencies = [
  "axum-extra",
  "base64 0.22.1",
  "chrono",
+ "hmac",
  "http-body-util",
  "jsonwebtoken",
  "lambda_http",

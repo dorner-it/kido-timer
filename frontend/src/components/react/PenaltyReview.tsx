@@ -36,7 +36,7 @@ export default function PenaltyReview({ id }: Props) {
       setPending(pendingList);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        window.location.href = apiClient.auth.loginUrl();
+        window.location.href = "/login";
         return;
       }
       setError(err instanceof Error ? err.message : 'Unbekannter Fehler');

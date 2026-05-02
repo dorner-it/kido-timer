@@ -27,35 +27,6 @@ variable "lambda_zip_path" {
   default     = "../backend/target/lambda/bootstrap/bootstrap.zip"
 }
 
-variable "cognito_hosted_ui_domain_prefix" {
-  description = "Cognito hosted UI subdomain prefix (must be globally unique within the AWS region)."
-  type        = string
-}
-
-variable "cognito_callback_urls" {
-  description = "OAuth2 callback URLs registered with the Cognito client. Hit by Cognito after login; backend handles them."
-  type        = list(string)
-  default     = ["http://localhost:9000/api/auth/callback"]
-}
-
-variable "cognito_logout_urls" {
-  description = "Post-logout redirect URLs registered with the Cognito client. Frontend hosts these."
-  type        = list(string)
-  default     = ["http://localhost:4321/"]
-}
-
-variable "cognito_redirect_uri" {
-  description = "The single callback URL the backend redirects to after Cognito login. Must be one of cognito_callback_urls."
-  type        = string
-  default     = "http://localhost:9000/api/auth/callback"
-}
-
-variable "frontend_base_url" {
-  description = "Frontend base URL (used for post-login redirects)."
-  type        = string
-  default     = "http://localhost:4321"
-}
-
 variable "cors_allowed_origins" {
   description = "Allowed CORS origins (Vercel domains). Empty list disables CORS configuration."
   type        = list(string)

@@ -46,13 +46,16 @@ resource "aws_iam_role_policy" "ddb" {
   policy = data.aws_iam_policy_document.ddb.json
 }
 
-# Cognito: read the user-pool client (for the client secret used in the
-# Authorization Code exchange). Scoped to this user pool.
+# Cognito: backend-mediated auth via AdminInitiateAuth +
+# AdminRespondToAuthChallenge (no Hosted UI). DescribeUserPoolClient is
+# called once at cold start to fetch the client secret.
 data "aws_iam_policy_document" "cognito" {
   statement {
     actions = [
       "cognito-idp:DescribeUserPoolClient",
-      "cognito-idp:RevokeToken",
+      "cognito-idp:AdminInitiateAuth",
+      "cognito-idp:AdminRespondToAuthChallenge",
+      "cognito-idp:AdminUserGlobalSignOut",
     ]
     resources = [var.cognito_user_pool_arn]
   }
@@ -91,9 +94,6 @@ resource "aws_lambda_function" "this" {
       ENV                  = var.env
       COGNITO_USER_POOL_ID = var.cognito_user_pool_id
       COGNITO_CLIENT_ID    = var.cognito_client_id
-      COGNITO_DOMAIN       = var.cognito_hosted_ui_domain
-      COGNITO_REDIRECT_URI = var.cognito_redirect_uri
-      FRONTEND_BASE_URL    = var.frontend_base_url
     }
   }
 

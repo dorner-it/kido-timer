@@ -146,14 +146,26 @@ export interface DeciderState {
 
 // ===== client =====
 
+export type SignInResponse =
+  | { result: 'authenticated'; user: AuthenticatedUser }
+  | { result: 'new_password_required'; session: string; email: string };
+
 export const apiClient = {
   auth: {
     me: () => request<{ user: AuthenticatedUser }>('/api/auth/me'),
-    loginUrl: () => `${API_BASE_URL}/api/auth/login`,
-    logout: () =>
-      fetch(`${API_BASE_URL}/api/auth/logout`, {
+    signIn: (input: { email: string; password: string }) =>
+      request<SignInResponse>('/api/auth/sign-in', {
         method: 'POST',
-        credentials: 'include',
+        body: JSON.stringify(input),
+      }),
+    completeNewPassword: (input: {
+      email: string;
+      new_password: string;
+      session: string;
+    }) =>
+      request<SignInResponse>('/api/auth/complete-new-password', {
+        method: 'POST',
+        body: JSON.stringify(input),
       }),
   },
   competitions: {

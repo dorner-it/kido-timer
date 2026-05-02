@@ -55,20 +55,14 @@ resource "aws_cognito_user_pool" "this" {
   tags = var.tags
 }
 
+# Confidential client for backend-mediated auth. The Lambda calls
+# AdminInitiateAuth with USERNAME + PASSWORD + SECRET_HASH, validates the
+# returned id_token, and stores the session server-side. No Hosted UI.
 resource "aws_cognito_user_pool_client" "web" {
   name         = "${var.user_pool_name}-web"
   user_pool_id = aws_cognito_user_pool.this.id
 
   generate_secret = true
-
-  allowed_oauth_flows                  = ["code"]
-  allowed_oauth_flows_user_pool_client = true
-  allowed_oauth_scopes                 = ["openid", "email", "profile"]
-
-  callback_urls = var.callback_urls
-  logout_urls   = var.logout_urls
-
-  supported_identity_providers = ["COGNITO"]
 
   access_token_validity  = 60
   id_token_validity      = 60
@@ -83,12 +77,7 @@ resource "aws_cognito_user_pool_client" "web" {
   prevent_user_existence_errors = "ENABLED"
 
   explicit_auth_flows = [
+    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_SRP_AUTH",
   ]
-}
-
-resource "aws_cognito_user_pool_domain" "this" {
-  domain       = var.hosted_ui_domain_prefix
-  user_pool_id = aws_cognito_user_pool.this.id
 }

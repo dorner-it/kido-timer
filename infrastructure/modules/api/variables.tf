@@ -43,21 +43,6 @@ variable "cognito_client_id" {
   type        = string
 }
 
-variable "cognito_hosted_ui_domain" {
-  description = "Fully qualified Cognito hosted UI domain (used by backend to redirect to login)."
-  type        = string
-}
-
-variable "cognito_redirect_uri" {
-  description = "Backend callback URL Cognito redirects to after login."
-  type        = string
-}
-
-variable "frontend_base_url" {
-  description = "Frontend base URL (used for post-login and post-logout redirects)."
-  type        = string
-}
-
 variable "cors_allowed_origins" {
   description = "Allowed CORS origins. Empty list disables the CORS configuration."
   type        = list(string)

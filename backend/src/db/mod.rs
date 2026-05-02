@@ -3,7 +3,6 @@
 pub mod client;
 pub mod competitions;
 pub mod keys;
-pub mod oauth_state;
 pub mod penalties;
 pub mod runners;
 pub mod runs;

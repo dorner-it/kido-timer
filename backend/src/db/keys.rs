@@ -22,10 +22,6 @@ pub fn competition_pk(id: Uuid) -> String {
     format!("COMP#{id}")
 }
 
-pub fn oauth_state_pk(state: &str) -> String {
-    format!("OAUTH_STATE#{state}")
-}
-
 pub fn penalty_status_gsi1pk(competition_id: Uuid) -> String {
     format!("COMP#{competition_id}#PENALTY")
 }
@@ -43,7 +39,6 @@ pub fn user_owned_competitions_gsi1pk(owner_sub: &str) -> String {
 pub const SK_PROFILE: &str = "PROFILE";
 pub const SK_META: &str = "META";
 pub const SK_ACTIVE_COMP: &str = "ACTIVE_COMP";
-pub const SK_OAUTH_STATE: &str = "STATE";
 
 // ===== Sort keys (dynamic) =====
 

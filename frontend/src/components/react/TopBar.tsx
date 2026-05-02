@@ -20,7 +20,7 @@ export default function TopBar({ context }: Props) {
       .then((res) => setUser(res.user))
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
-          window.location.href = apiClient.auth.loginUrl();
+          window.location.href = "/login";
         }
       });
   }, []);

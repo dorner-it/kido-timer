@@ -41,3 +41,4 @@ crash.*.log
 
 # Logs
 *.log
+.vercel
