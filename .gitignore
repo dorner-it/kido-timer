@@ -18,6 +18,7 @@ dist/
 *.tfstate.backup
 *.tfvars
 !*.tfvars.example
+!terraform.tfvars.prod
 crash.log
 crash.*.log
 
