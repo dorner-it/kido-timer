@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-use ki_do_timer_backend::app;
+use ki_do_timer_backend::{app, config::Config};
 use lambda_http::{Error, run};
 use tracing_subscriber::EnvFilter;
 
@@ -15,6 +15,14 @@ async fn main() -> Result<(), Error> {
         .with_target(false)
         .with_current_span(false)
         .init();
+
+    let config = Config::from_env();
+    tracing::info!(
+        env = %config.env,
+        region = %config.aws_region,
+        table = %config.table_name,
+        "starting up"
+    );
 
     run(app::router()).await
 }
