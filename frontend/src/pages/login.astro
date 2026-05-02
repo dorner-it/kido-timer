@@ -1,0 +1,14 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import LoginForm from '../components/react/LoginForm.tsx';
+---
+
+<BaseLayout title="Anmelden – KI-DO Timer">
+  <main class="flex min-h-screen items-center justify-center px-4 py-12">
+    <div class="w-full max-w-sm rounded-xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
+      <h1 class="mb-1 text-2xl font-semibold tracking-tight">Anmelden</h1>
+      <p class="mb-6 text-sm text-slate-600">KI-DO Timer Organisator-Bereich</p>
+      <LoginForm client:load />
+    </div>
+  </main>
+</BaseLayout>

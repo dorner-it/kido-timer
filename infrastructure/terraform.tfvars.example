@@ -1,0 +1,11 @@
+env    = "dev"
+region = "eu-central-1"
+
+# Set once a Vercel domain is allocated. CORS is disabled while this list is empty.
+# cors_allowed_origins = ["https://app.ki-do.it"]
+
+# Override after running `make backend-build` if the binary lives elsewhere.
+# lambda_zip_path = "../backend/target/lambda/bootstrap/bootstrap.zip"
+
+# log_level          = "info"
+# log_retention_days = 14
