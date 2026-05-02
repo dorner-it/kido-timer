@@ -63,8 +63,8 @@ pub fn competition_sk_run(run_number: u32, run_id: Uuid) -> String {
     format!("RUN#{run_number:04}#{run_id}")
 }
 
-pub fn competition_sk_penalty(created_at: DateTime<Utc>, penalty_id: Uuid) -> String {
-    format!("PENALTY#{}#{penalty_id}", created_at.to_rfc3339())
+pub fn competition_sk_penalty(penalty_id: Uuid) -> String {
+    format!("PENALTY#{penalty_id}")
 }
 
 pub fn user_competitions_gsi1sk(date: NaiveDate, competition_id: Uuid) -> String {

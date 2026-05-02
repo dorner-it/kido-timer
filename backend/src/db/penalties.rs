@@ -41,7 +41,7 @@ impl PenaltyItem {
     fn from_penalty(p: &Penalty) -> Self {
         Self {
             pk: keys::competition_pk(p.competition_id),
-            sk: keys::competition_sk_penalty(p.created_at, p.id),
+            sk: keys::competition_sk_penalty(p.id),
             gsi1pk: keys::penalty_status_gsi1pk(p.competition_id),
             gsi1sk: keys::penalty_status_gsi1sk(p.status.as_str(), p.created_at),
 
@@ -94,19 +94,17 @@ pub async fn put(client: &DbClient, penalty: &Penalty) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn get(client: &DbClient, penalty: &Penalty) -> AppResult<Option<Penalty>> {
+pub async fn get(
+    client: &DbClient,
+    competition_id: Uuid,
+    penalty_id: Uuid,
+) -> AppResult<Option<Penalty>> {
     let res = client
         .inner
         .get_item()
         .table_name(&client.table_name)
-        .key(
-            "PK",
-            AttributeValue::S(keys::competition_pk(penalty.competition_id)),
-        )
-        .key(
-            "SK",
-            AttributeValue::S(keys::competition_sk_penalty(penalty.created_at, penalty.id)),
-        )
+        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("SK", AttributeValue::S(keys::competition_sk_penalty(penalty_id)))
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb get_item: {e}")))?;
@@ -119,19 +117,17 @@ pub async fn get(client: &DbClient, penalty: &Penalty) -> AppResult<Option<Penal
     Ok(Some(parsed.into_penalty()))
 }
 
-pub async fn delete(client: &DbClient, penalty: &Penalty) -> AppResult<()> {
+pub async fn delete(
+    client: &DbClient,
+    competition_id: Uuid,
+    penalty_id: Uuid,
+) -> AppResult<()> {
     client
         .inner
         .delete_item()
         .table_name(&client.table_name)
-        .key(
-            "PK",
-            AttributeValue::S(keys::competition_pk(penalty.competition_id)),
-        )
-        .key(
-            "SK",
-            AttributeValue::S(keys::competition_sk_penalty(penalty.created_at, penalty.id)),
-        )
+        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("SK", AttributeValue::S(keys::competition_sk_penalty(penalty_id)))
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb delete_item: {e}")))?;

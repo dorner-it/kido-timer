@@ -15,17 +15,26 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
-/// Stateless router used by the `/api/health` integration test. The binary
-/// uses [`router`] instead.
+/// Stateless router used by the `/api/health` integration test.
 pub fn health_router() -> Router {
     Router::new().route("/api/health", get(health))
 }
 
-/// Full router with state. `/api/health` is included for liveness probes
-/// even though it doesn't read state.
+/// Composed competitions router: `/api/competitions/...` covers the
+/// configurator's CRUD plus its nested teams/runners/runs/penalties paths.
+fn competitions_router() -> Router<AppState> {
+    routes::competitions::router()
+        .merge(routes::teams::router())
+        .merge(routes::runners::router())
+        .merge(routes::runs::router())
+        .merge(routes::penalties::router())
+}
+
 pub fn router(state: AppState) -> Router {
     Router::<AppState>::new()
         .route("/api/health", get(health))
         .nest("/api/auth", routes::auth::router())
+        .nest("/api/competitions", competitions_router())
+        .nest("/api/decider", routes::decider::router())
         .with_state(state)
 }

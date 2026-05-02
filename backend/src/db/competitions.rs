@@ -124,6 +124,151 @@ pub async fn delete(client: &DbClient, id: Uuid) -> AppResult<()> {
     Ok(())
 }
 
+/// Delete the competition META row plus every Team / Runner / Run / Penalty
+/// row underneath it. Two phases: query everything under PK = COMP#<id>,
+/// then chunked BatchWriteItem deletes (DDB caps each batch at 25).
+pub async fn cascade_delete(client: &DbClient, id: Uuid) -> AppResult<()> {
+    use aws_sdk_dynamodb::types::{DeleteRequest, WriteRequest};
+
+    let pk = keys::competition_pk(id);
+    let mut last_evaluated: Option<HashMap<String, AttributeValue>> = None;
+    let mut all_keys: Vec<(String, String)> = Vec::new();
+
+    loop {
+        let res = client
+            .inner
+            .query()
+            .table_name(&client.table_name)
+            .key_condition_expression("PK = :pk")
+            .expression_attribute_values(":pk", AttributeValue::S(pk.clone()))
+            .projection_expression("PK, SK")
+            .set_exclusive_start_key(last_evaluated.clone())
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
+
+        for item in res.items.unwrap_or_default() {
+            let pk_val = item
+                .get("PK")
+                .and_then(|v| v.as_s().ok())
+                .cloned()
+                .unwrap_or_default();
+            let sk_val = item
+                .get("SK")
+                .and_then(|v| v.as_s().ok())
+                .cloned()
+                .unwrap_or_default();
+            if !pk_val.is_empty() && !sk_val.is_empty() {
+                all_keys.push((pk_val, sk_val));
+            }
+        }
+
+        last_evaluated = res.last_evaluated_key;
+        if last_evaluated.is_none() {
+            break;
+        }
+    }
+
+    for chunk in all_keys.chunks(25) {
+        let mut requests: Vec<WriteRequest> = Vec::with_capacity(chunk.len());
+        for (pk_val, sk_val) in chunk {
+            let delete_req = DeleteRequest::builder()
+                .key("PK", AttributeValue::S(pk_val.clone()))
+                .key("SK", AttributeValue::S(sk_val.clone()))
+                .build()
+                .map_err(|e| AppError::Internal(format!("delete request: {e}")))?;
+            requests.push(WriteRequest::builder().delete_request(delete_req).build());
+        }
+
+        client
+            .inner
+            .batch_write_item()
+            .request_items(client.table_name.clone(), requests)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("dynamodb batch_write: {e}")))?;
+    }
+
+    Ok(())
+}
+
+/// Sets is_active=true on the target competition and is_active=false on every
+/// other competition the same owner has. Two-phase update; not transactional,
+/// but acceptable for v1 with at most a few dozen competitions per user.
+pub async fn activate_exclusive(
+    client: &DbClient,
+    owner_sub: &str,
+    target_id: Uuid,
+) -> AppResult<()> {
+    let competitions = list_for_owner(client, owner_sub).await?;
+    for c in competitions {
+        let should_be_active = c.id == target_id;
+        if c.is_active == should_be_active {
+            continue;
+        }
+        client
+            .inner
+            .update_item()
+            .table_name(&client.table_name)
+            .key("PK", AttributeValue::S(keys::competition_pk(c.id)))
+            .key("SK", AttributeValue::S(keys::SK_META.to_string()))
+            .update_expression("SET is_active = :a, updated_at = :u")
+            .expression_attribute_values(":a", AttributeValue::Bool(should_be_active))
+            .expression_attribute_values(":u", AttributeValue::S(Utc::now().to_rfc3339()))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
+    }
+    Ok(())
+}
+
+pub async fn set_current_run(
+    client: &DbClient,
+    competition_id: Uuid,
+    run_id: Option<Uuid>,
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let value = match run_id {
+        Some(id) => AttributeValue::S(id.to_string()),
+        None => AttributeValue::Null(true),
+    };
+    client
+        .inner
+        .update_item()
+        .table_name(&client.table_name)
+        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("SK", AttributeValue::S(keys::SK_META.to_string()))
+        .update_expression("SET current_run_id = :r, updated_at = :u")
+        .expression_attribute_values(":r", value)
+        .expression_attribute_values(":u", AttributeValue::S(now))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
+    Ok(())
+}
+
+pub async fn rotate_decider_tokens(
+    client: &DbClient,
+    competition_id: Uuid,
+    tokens: [String; 4],
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let av = AttributeValue::L(tokens.into_iter().map(AttributeValue::S).collect());
+    client
+        .inner
+        .update_item()
+        .table_name(&client.table_name)
+        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("SK", AttributeValue::S(keys::SK_META.to_string()))
+        .update_expression("SET decider_tokens = :t, updated_at = :u")
+        .expression_attribute_values(":t", av)
+        .expression_attribute_values(":u", AttributeValue::S(now))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
+    Ok(())
+}
+
 pub async fn list_for_owner(client: &DbClient, owner_sub: &str) -> AppResult<Vec<Competition>> {
     let res = client
         .inner
