@@ -7,3 +7,4 @@ pub mod penalties;
 pub mod runners;
 pub mod runs;
 pub mod teams;
+pub mod users;

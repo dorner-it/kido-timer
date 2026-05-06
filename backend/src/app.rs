@@ -34,6 +34,7 @@ pub fn router(state: AppState) -> Router {
     Router::<AppState>::new()
         .route("/api/health", get(health))
         .nest("/api/auth", routes::auth::router())
+        .nest("/api/users", routes::users::router())
         .nest("/api/competitions", competitions_router())
         .nest("/api/decider", routes::decider::router())
         .with_state(state)

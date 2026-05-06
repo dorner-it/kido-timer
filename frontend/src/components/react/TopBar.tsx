@@ -68,6 +68,9 @@ export default function TopBar({ context }: Props) {
             <span className="label">{user.email}</span>
           </div>
         )}
+        <a href="/settings" className="btn" title="Einstellungen">
+          ⚙
+        </a>
         <form method="post" action="/api/auth/logout">
           <button type="submit" className="btn">
             Abmelden

@@ -1,0 +1,10 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import TopBar from '../components/react/TopBar.tsx';
+import UserSettings from '../components/react/UserSettings.tsx';
+---
+
+<BaseLayout title="Einstellungen – KI-DO Timer">
+  <TopBar client:load context="Einstellungen" />
+  <UserSettings client:load />
+</BaseLayout>

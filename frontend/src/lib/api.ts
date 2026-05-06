@@ -136,6 +136,18 @@ export interface CompetitionDetail {
   runs: Run[];
 }
 
+export interface ApiKeySummary {
+  key_id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+}
+
+export interface ApiKeyCreatedResponse {
+  key: ApiKeySummary;
+  plaintext: string;
+}
+
 export interface DeciderState {
   competition: { id: string; name: string; mode: TimerMode };
   slot: number;
@@ -327,6 +339,16 @@ export const apiClient = {
         `/api/competitions/${competition_id}/penalties/${penalty_id}/reject`,
         { method: 'POST' },
       ),
+  },
+  apiKeys: {
+    list: () => request<ApiKeySummary[]>('/api/users/me/api-keys'),
+    create: (input: { name?: string }) =>
+      request<ApiKeyCreatedResponse>('/api/users/me/api-keys', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    revoke: (key_id: string) =>
+      request<void>(`/api/users/me/api-keys/${key_id}`, { method: 'DELETE' }),
   },
   decider: {
     state: (owner_sub: string, slot: number, token: string) =>

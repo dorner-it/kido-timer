@@ -14,6 +14,7 @@ name = "bootstrap"
 path = "src/main.rs"
 
 [dependencies]
+argon2 = "0.5"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-cognitoidentityprovider = "1"
 aws-sdk-dynamodb = "1"

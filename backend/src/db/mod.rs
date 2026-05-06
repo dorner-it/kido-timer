@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
+pub mod api_keys;
 pub mod client;
 pub mod competitions;
 pub mod keys;
