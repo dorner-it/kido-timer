@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from 'react';
 
-import { ApiError, apiClient, type DeciderState } from '../../lib/api';
+import { ApiError, apiClient, type DeciderState, type TimerMode } from '../../lib/api';
+import {
+  PRESETS_BY_MODE,
+  reasonsForMode,
+  variantClasses,
+  type PenaltyPreset,
+} from '../../lib/decider-presets';
 import { formatTimeMs } from '../../lib/format';
 import { Brandmark } from './Brandmark';
 
@@ -12,14 +18,7 @@ export interface DeciderPadProps {
   token: string;
 }
 
-const PRESETS = [
-  { label: '+ 5 s', deltaMs: 5_000, reason: null },
-  { label: '+ 10 s', deltaMs: 10_000, reason: null },
-  { label: '+ 20 s', deltaMs: 20_000, reason: null },
-  { label: '+ 30 s', deltaMs: 30_000, reason: null },
-  { label: '+ 1:00', deltaMs: 60_000, reason: null },
-  { label: 'Disqualifikation', deltaMs: 999_000, reason: 'DSQ' },
-];
+const FLASH_MS = 700;
 
 export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPadProps) {
   const slot = Number(slotStr);
@@ -27,6 +26,10 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<{ id: string; label: string; at: number }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+
+  const presets = state ? PRESETS_BY_MODE[state.competition.mode] : [];
 
   useEffect(() => {
     refresh();
@@ -53,7 +56,12 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
     }
   };
 
-  const submit = async (label: string, deltaMs: number, reason: string | null) => {
+  const submit = async (
+    flash: string,
+    label: string,
+    deltaMs: number,
+    reason: string | null,
+  ) => {
     if (busy) return;
     if (!state?.current_run) {
       setError('Aktuell läuft kein Lauf.');
@@ -66,6 +74,11 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
         reason_code: reason,
       });
       setRecent((r) => [{ id: created.id, label, at: Date.now() }, ...r].slice(0, 5));
+      setFlashKey(flash);
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(50);
+      }
+      window.setTimeout(() => setFlashKey((k) => (k === flash ? null : k)), FLASH_MS);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Senden fehlgeschlagen');
     } finally {
@@ -143,29 +156,55 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
           </div>
         )}
 
-        {!state?.disabled && (
+        {state && !state.disabled && (
           <section className="mt-8">
             <span className="label">Strafen senden</span>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 stagger-rise">
-              {PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  type="button"
+              {presets.map((p) => (
+                <PresetButton
+                  key={p.reason_code}
+                  preset={p}
                   disabled={!state?.current_run || busy}
-                  onClick={() => submit(p.label, p.deltaMs, p.reason)}
-                  className="surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40"
-                >
-                  <span className="font-stencil text-[28px] font-bold text-ink-50 leading-none">
-                    {p.label}
-                  </span>
-                  {p.reason && <span className="label">{p.reason}</span>}
-                </button>
+                  flashing={flashKey === p.reason_code}
+                  onClick={() =>
+                    submit(p.reason_code, p.reason_label, p.delta_ms, p.reason_code)
+                  }
+                />
               ))}
+              <button
+                type="button"
+                disabled={!state?.current_run || busy}
+                onClick={() => setCustomOpen((v) => !v)}
+                className={`surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40 border-dashed ${
+                  customOpen ? 'ring-2 ring-signal/60' : ''
+                }`}
+              >
+                <span className="font-stencil text-[28px] font-bold text-ink-50 leading-none">
+                  {customOpen ? '×' : 'Andere'}
+                </span>
+                <span className="label">{customOpen ? 'Schließen' : 'Eigener Wert'}</span>
+              </button>
             </div>
+
+            {customOpen && (
+              <CustomPenaltyForm
+                mode={state!.competition.mode}
+                disabled={!state?.current_run || busy}
+                flashing={flashKey === 'custom'}
+                onSubmit={async (seconds, reasonCode) => {
+                  await submit(
+                    'custom',
+                    `+ ${seconds} s`,
+                    Math.round(seconds * 1000),
+                    reasonCode,
+                  );
+                }}
+              />
+            )}
           </section>
         )}
 
-        {!state?.disabled && (
+        {state && !state.disabled && (
         <section className="mt-10">
           <span className="label">Eigene Eingaben</span>
           {recent.length === 0 ? (
@@ -235,4 +274,118 @@ function relativeTime(at: number): string {
   const sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
   if (sec < 60) return `${sec}s`;
   return `${Math.floor(sec / 60)}m`;
+}
+
+function PresetButton({
+  preset,
+  disabled,
+  flashing,
+  onClick,
+}: {
+  preset: PenaltyPreset;
+  disabled: boolean;
+  flashing: boolean;
+  onClick: () => void;
+}) {
+  const variant = variantClasses(preset.variant);
+  const flashCls = flashing
+    ? 'ring-2 ring-status-confirmed bg-status-confirmed/15 scale-[0.98]'
+    : '';
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40 ${variant} ${flashCls}`}
+    >
+      <span className="font-stencil text-[28px] font-bold text-ink-50 leading-none">
+        {preset.label}
+      </span>
+      <span className="label">{preset.reason_label}</span>
+    </button>
+  );
+}
+
+function CustomPenaltyForm({
+  mode,
+  disabled,
+  flashing,
+  onSubmit,
+}: {
+  mode: TimerMode;
+  disabled: boolean;
+  flashing: boolean;
+  onSubmit: (seconds: number, reasonCode: string | null) => Promise<void>;
+}) {
+  const reasons = reasonsForMode(mode);
+  const [seconds, setSeconds] = useState<string>('');
+  const [reasonCode, setReasonCode] = useState<string>(reasons[0]?.code ?? '');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const s = Number(seconds.replace(',', '.'));
+    if (!Number.isFinite(s) || s === 0) return;
+    setSubmitting(true);
+    try {
+      await onSubmit(s, reasonCode || null);
+      setSeconds('');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={handle}
+      className={`surface mt-3 flex flex-wrap gap-3 p-4 animate-rise ${
+        flashing ? 'ring-2 ring-status-confirmed' : ''
+      }`}
+    >
+      <div className="field w-32">
+        <label className="label" htmlFor="custom_seconds">
+          Sekunden
+        </label>
+        <input
+          id="custom_seconds"
+          type="number"
+          inputMode="decimal"
+          step="0.1"
+          autoFocus
+          className="input tnum"
+          placeholder="z. B. 7.5"
+          value={seconds}
+          onChange={(e) => setSeconds(e.target.value)}
+        />
+      </div>
+      <div className="field flex-1 min-w-[160px]">
+        <label className="label" htmlFor="custom_reason">
+          Grund
+        </label>
+        <select
+          id="custom_reason"
+          className="input"
+          value={reasonCode}
+          onChange={(e) => setReasonCode(e.target.value)}
+        >
+          {reasons.map((r) => (
+            <option key={r.code} value={r.code}>
+              {r.label}
+            </option>
+          ))}
+          <option value="">— ohne Grund —</option>
+        </select>
+      </div>
+      <button
+        type="submit"
+        className="btn btn-primary self-end"
+        disabled={disabled || submitting || !seconds}
+      >
+        {submitting ? 'Sende …' : 'Senden'}
+      </button>
+      <p className="font-mono text-[10px] text-ink-300 w-full">
+        Negative Werte (z. B. -2) für eine Korrektur zugunsten der Mannschaft sind erlaubt.
+      </p>
+    </form>
+  );
 }
