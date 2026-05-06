@@ -36,9 +36,14 @@ crash.*.log
 # Editors
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 
 # Logs
 *.log
 .vercel
+
+# Local-only test rigs / sim scripts. Anything under scripts/ stays
+# untracked — keep it on this machine, never commit.
+/scripts/
