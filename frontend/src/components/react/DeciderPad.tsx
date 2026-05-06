@@ -22,7 +22,10 @@ import { Brandmark } from './Brandmark';
 
 export interface DeciderPadProps {
   ownerSub: string;
-  slot: string;
+  /** URL slot param ("1".."4"). Named `slotIndex` rather than `slot`
+   *  because Astro's compiler treats `slot={...}` on a child as the
+   *  named-slot directive, not a prop. */
+  slotIndex: string;
   token: string;
 }
 
@@ -35,8 +38,8 @@ interface ConfirmedSubmission {
   at: number;
 }
 
-export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPadProps) {
-  const slot = Number(slotStr);
+export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadProps) {
+  const slot = Number(slotIndex);
   const [state, setState] = useState<DeciderState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<ConfirmedSubmission[]>([]);
