@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": "22.x"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && node -e \"const f='.vercel/output/functions/_render.func/.vc-config.json'; const fs=require('fs'); fs.writeFileSync(f, fs.readFileSync(f,'utf8').replace('nodejs18.x','nodejs22.x'))\"",
+    "build": "astro build && node -e \"const f='.vercel/output/functions/_render.func/.vc-config.json'; const fs=require('fs'); fs.writeFileSync(f, fs.readFileSync(f,'utf8').replace('nodejs18.x','nodejs24.x'))\"",
     "preview": "astro preview",
     "check": "astro check && tsc --noEmit"
   },
