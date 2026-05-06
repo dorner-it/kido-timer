@@ -167,6 +167,20 @@ export const apiClient = {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+    forgotPassword: (input: { email: string }) =>
+      request<void>('/api/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    confirmForgotPassword: (input: {
+      email: string;
+      code: string;
+      new_password: string;
+    }) =>
+      request<void>('/api/auth/confirm-forgot-password', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
   },
   competitions: {
     list: () => request<Competition[]>('/api/competitions'),

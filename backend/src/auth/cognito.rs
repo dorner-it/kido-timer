@@ -2,6 +2,9 @@
 
 use aws_config::BehaviorVersion;
 use aws_sdk_cognitoidentityprovider::Client as CognitoIdpClient;
+use aws_sdk_cognitoidentityprovider::error::SdkError;
+use aws_sdk_cognitoidentityprovider::operation::confirm_forgot_password::ConfirmForgotPasswordError;
+use aws_sdk_cognitoidentityprovider::operation::forgot_password::ForgotPasswordError;
 use aws_sdk_cognitoidentityprovider::types::{AuthFlowType, ChallengeNameType};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, Mac};
@@ -125,6 +128,48 @@ impl CognitoClient {
         TokenSet::from_auth(auth)
     }
 
+    /// Trigger Cognito's email-based password recovery. Cognito honours
+    /// `prevent_user_existence_errors=ENABLED` on the user pool client, so this
+    /// returns success even for unknown emails — no enumeration leak.
+    pub async fn forgot_password(&self, email: &str) -> AppResult<()> {
+        let secret_hash = self.secret_hash(email);
+
+        self.idp
+            .forgot_password()
+            .client_id(&self.client_id)
+            .username(email)
+            .secret_hash(secret_hash)
+            .send()
+            .await
+            .map_err(map_forgot_password_error)?;
+
+        Ok(())
+    }
+
+    /// Complete the recovery flow: Cognito verifies the emailed code and sets
+    /// `new_password` as the user's permanent password.
+    pub async fn confirm_forgot_password(
+        &self,
+        email: &str,
+        code: &str,
+        new_password: &str,
+    ) -> AppResult<()> {
+        let secret_hash = self.secret_hash(email);
+
+        self.idp
+            .confirm_forgot_password()
+            .client_id(&self.client_id)
+            .username(email)
+            .confirmation_code(code)
+            .password(new_password)
+            .secret_hash(secret_hash)
+            .send()
+            .await
+            .map_err(map_confirm_forgot_password_error)?;
+
+        Ok(())
+    }
+
     fn secret_hash(&self, username: &str) -> String {
         let mut mac = Hmac::<Sha256>::new_from_slice(self.client_secret.as_bytes())
             .expect("HMAC-SHA256 accepts any key length");
@@ -143,6 +188,56 @@ pub struct TokenSet {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
+}
+
+fn map_forgot_password_error(err: SdkError<ForgotPasswordError>) -> AppError {
+    if let SdkError::ServiceError(svc) = &err {
+        match svc.err() {
+            ForgotPasswordError::LimitExceededException(_)
+            | ForgotPasswordError::TooManyRequestsException(_) => return AppError::RateLimited,
+            ForgotPasswordError::InvalidParameterException(_) => {
+                return AppError::Validation("Ungültige E-Mail-Adresse".into());
+            }
+            ForgotPasswordError::CodeDeliveryFailureException(_) => {
+                return AppError::Internal("password reset email could not be delivered".into());
+            }
+            _ => {}
+        }
+    }
+    tracing::warn!(error = %err, "forgot_password failed");
+    AppError::Internal("forgot_password failed".into())
+}
+
+fn map_confirm_forgot_password_error(err: SdkError<ConfirmForgotPasswordError>) -> AppError {
+    if let SdkError::ServiceError(svc) = &err {
+        match svc.err() {
+            ConfirmForgotPasswordError::CodeMismatchException(_)
+            | ConfirmForgotPasswordError::ExpiredCodeException(_) => {
+                return AppError::Validation(
+                    "Bestätigungscode ist ungültig oder abgelaufen".into(),
+                );
+            }
+            ConfirmForgotPasswordError::InvalidPasswordException(_) => {
+                return AppError::Validation(
+                    "Passwort entspricht nicht den Anforderungen (≥ 12 Zeichen, Groß- und Kleinbuchstaben, Ziffer)".into(),
+                );
+            }
+            ConfirmForgotPasswordError::LimitExceededException(_)
+            | ConfirmForgotPasswordError::TooManyFailedAttemptsException(_)
+            | ConfirmForgotPasswordError::TooManyRequestsException(_) => {
+                return AppError::RateLimited;
+            }
+            ConfirmForgotPasswordError::UserNotFoundException(_) => {
+                // Behave like a wrong code so we don't leak account existence.
+                return AppError::Validation(
+                    "Bestätigungscode ist ungültig oder abgelaufen".into(),
+                );
+            }
+            _ => {}
+        }
+    }
+    tracing::warn!(error = %err, "confirm_forgot_password failed");
+    AppError::Internal("confirm_forgot_password failed".into())
 }
 
 impl TokenSet {
