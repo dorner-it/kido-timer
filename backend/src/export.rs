@@ -62,6 +62,17 @@ pub struct ExportedCompetition {
     pub location: Option<String>,
     pub mode: crate::models::TimerMode,
     pub sync_mode: crate::models::SyncMode,
+    /// Whether the organizer has marked this competition active. Older
+    /// `.kido` files (written before this field existed) deserialise to
+    /// `false`; harmless because importers don't trust this anyway.
+    #[serde(default)]
+    pub is_active: bool,
+    /// The run id the organizer currently has on the lane. The desktop
+    /// app reads this in live mode to know where to push timing
+    /// updates. `None` when no run is currently active. Older `.kido`
+    /// files default to `None`.
+    #[serde(default)]
+    pub current_run_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -76,6 +87,8 @@ impl ExportedCompetition {
             location: c.location.clone(),
             mode: c.mode,
             sync_mode: c.sync_mode,
+            is_active: c.is_active,
+            current_run_id: c.current_run_id,
             created_at: c.created_at,
             updated_at: c.updated_at,
         }

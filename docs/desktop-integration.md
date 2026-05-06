@@ -70,6 +70,8 @@ After base64-decoding `envelope.payload` you get this JSON:
     "location": "Sportplatz Musterhausen",      // nullable
     "mode": "two_lane_parallel",                // see TimerMode below
     "sync_mode": "live",                        // see SyncMode below
+    "is_active": true,                          // organizer toggle
+    "current_run_id": "<uuid|null>",            // run currently on the lane
     "created_at": "...",
     "updated_at": "..."
     // NOTE: decider_tokens are intentionally NOT in the file
