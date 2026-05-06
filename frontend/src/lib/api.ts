@@ -382,7 +382,13 @@ export const apiClient = {
       owner_sub: string,
       slot: number,
       token: string,
-      input: { delta_ms: number; reason_code?: string | null },
+      input: {
+        delta_ms: number;
+        reason_code?: string | null;
+        /** Stable client-generated UUID; backend uses it as the row id so
+         *  retries from a flaky tablet are idempotent. */
+        client_id?: string;
+      },
     ) =>
       request<Penalty>(`/api/decider/${owner_sub}/${slot}/${token}/penalties`, {
         method: 'POST',

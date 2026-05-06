@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, apiClient, type DeciderState, type TimerMode } from '../../lib/api';
 import {
@@ -10,6 +10,14 @@ import {
   type PenaltyPreset,
 } from '../../lib/decider-presets';
 import { formatTimeMs } from '../../lib/format';
+import {
+  attemptSubmit,
+  clientId,
+  droppedLog,
+  penaltyQueue,
+  usePenaltyQueue,
+  type DroppedSubmit,
+} from '../../lib/penalty-queue';
 import { Brandmark } from './Brandmark';
 
 export interface DeciderPadProps {
@@ -20,16 +28,53 @@ export interface DeciderPadProps {
 
 const FLASH_MS = 700;
 
+interface ConfirmedSubmission {
+  id: string;
+  client_id: string;
+  label: string;
+  at: number;
+}
+
 export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPadProps) {
   const slot = Number(slotStr);
   const [state, setState] = useState<DeciderState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [recent, setRecent] = useState<{ id: string; label: string; at: number }[]>([]);
+  const [confirmed, setConfirmed] = useState<ConfirmedSubmission[]>([]);
   const [busy, setBusy] = useState(false);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
 
   const presets = state ? PRESETS_BY_MODE[state.competition.mode] : [];
+
+  // Promote drained-queue items to the confirmed list so the operator
+  // sees their late-arriving entries with a withdraw button.
+  const handleConfirmed = useCallback(
+    (entry: { client_id: string; id: string }) => {
+      setConfirmed((c) => {
+        if (c.some((x) => x.client_id === entry.client_id)) return c;
+        // We don't carry the original label across reloads; show the
+        // confirmed-but-relabelled-from-queue entry generically.
+        return [
+          { id: entry.id, client_id: entry.client_id, label: 'Strafe gesendet', at: Date.now() },
+          ...c,
+        ].slice(0, 8);
+      });
+    },
+    [],
+  );
+
+  const handleDropped = useCallback((entry: DroppedSubmit) => {
+    setError(
+      `Strafe „${entry.label}" wurde verworfen (${entry.reason}). Bitte nochmal eingeben.`,
+    );
+  }, []);
+
+  const queueOptions = useMemo(
+    () => ({ onConfirmed: handleConfirmed, onDropped: handleDropped }),
+    [handleConfirmed, handleDropped],
+  );
+
+  const { items: queued, online, draining } = usePenaltyQueue(queueOptions);
 
   useEffect(() => {
     refresh();
@@ -68,28 +113,62 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
       return;
     }
     setBusy(true);
+
+    const queueItem = {
+      client_id: clientId(),
+      owner_sub: ownerSub,
+      slot,
+      token,
+      delta_ms: deltaMs,
+      reason_code: reason,
+      label,
+      queued_at: Date.now(),
+    };
+
+    // Always flash + vibrate immediately so the tap feels responsive
+    // even if the backend hasn't acknowledged yet. The operator sees
+    // *something happened*; the queue takes over from there.
+    setFlashKey(flash);
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(50);
+    }
+    window.setTimeout(() => setFlashKey((k) => (k === flash ? null : k)), FLASH_MS);
+
     try {
-      const created = await apiClient.decider.submit(ownerSub, slot, token, {
-        delta_ms: deltaMs,
-        reason_code: reason,
-      });
-      setRecent((r) => [{ id: created.id, label, at: Date.now() }, ...r].slice(0, 5));
-      setFlashKey(flash);
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate(50);
+      const result = await attemptSubmit(queueItem);
+      if (result.ok) {
+        setConfirmed((c) =>
+          [
+            { id: result.id, client_id: queueItem.client_id, label, at: Date.now() },
+            ...c,
+          ].slice(0, 8),
+        );
+        setError(null);
+      } else if (result.retriable) {
+        penaltyQueue.enqueue(queueItem);
+      } else {
+        droppedLog.push({
+          ...queueItem,
+          dropped_at: Date.now(),
+          reason: result.message,
+          http_status: result.status,
+        });
+        setError(`Strafe abgelehnt (${result.message}). Bitte nochmal eingeben.`);
       }
-      window.setTimeout(() => setFlashKey((k) => (k === flash ? null : k)), FLASH_MS);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Senden fehlgeschlagen');
     } finally {
       setBusy(false);
     }
   };
 
-  const withdraw = async (id: string) => {
+  const withdraw = async (target: { client_id: string; id?: string }) => {
+    // Queued (not yet sent) → just remove locally.
+    if (!target.id) {
+      penaltyQueue.remove(target.client_id);
+      return;
+    }
     try {
-      await apiClient.decider.withdraw(ownerSub, slot, token, id);
-      setRecent((r) => r.filter((x) => x.id !== id));
+      await apiClient.decider.withdraw(ownerSub, slot, token, target.id);
+      setConfirmed((c) => c.filter((x) => x.client_id !== target.client_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Zurückziehen fehlgeschlagen');
     }
@@ -107,6 +186,7 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
             </span>
           </div>
         </div>
+        <ConnectivityPill online={online} pending={queued.length} draining={draining} />
         <div className="flex flex-col items-end leading-tight">
           <span className="font-stencil text-[28px] font-bold text-signal-glow leading-none tnum">
             B{slot}
@@ -207,15 +287,41 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
         {state && !state.disabled && (
         <section className="mt-10">
           <span className="label">Eigene Eingaben</span>
-          {recent.length === 0 ? (
+          {queued.length === 0 && confirmed.length === 0 ? (
             <p className="mt-2 font-mono text-[12px] text-ink-200">Noch nichts gesendet.</p>
           ) : (
             <ul className="mt-3 flex flex-col divide-y divide-[color:var(--hairline-color)]">
-              {recent.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-3 py-3">
+              {queued.map((q) => (
+                <li
+                  key={q.client_id}
+                  className="flex items-center justify-between gap-3 py-3"
+                >
+                  <span className="flex items-center gap-2 font-display text-[15px] text-status-armed">
+                    <span className="h-1.5 w-1.5 rounded-full bg-status-armed animate-pulse" />
+                    {q.label}
+                  </span>
+                  <span className="label">wird gesendet …</span>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => withdraw({ client_id: q.client_id })}
+                  >
+                    Verwerfen
+                  </button>
+                </li>
+              ))}
+              {confirmed.map((r) => (
+                <li
+                  key={r.client_id}
+                  className="flex items-center justify-between gap-3 py-3"
+                >
                   <span className="font-display text-[15px] text-ink-50">{r.label}</span>
                   <span className="label">{relativeTime(r.at)}</span>
-                  <button type="button" className="btn btn-danger" onClick={() => withdraw(r.id)}>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => withdraw({ client_id: r.client_id, id: r.id })}
+                  >
                     Zurückziehen
                   </button>
                 </li>
@@ -274,6 +380,39 @@ function relativeTime(at: number): string {
   const sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
   if (sec < 60) return `${sec}s`;
   return `${Math.floor(sec / 60)}m`;
+}
+
+function ConnectivityPill({
+  online,
+  pending,
+  draining,
+}: {
+  online: boolean;
+  pending: number;
+  draining: boolean;
+}) {
+  if (!online) {
+    return (
+      <span className="pill bg-status-unknown/15 text-status-unknown" role="status">
+        <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
+        Offline{pending > 0 ? ` (${pending})` : ''}
+      </span>
+    );
+  }
+  if (pending > 0) {
+    return (
+      <span className="pill bg-status-armed/15 text-status-armed" role="status">
+        <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
+        {draining ? 'Sendet …' : 'Wartend'} ({pending})
+      </span>
+    );
+  }
+  return (
+    <span className="pill bg-status-confirmed/15 text-status-confirmed" role="status">
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      Live
+    </span>
+  );
 }
 
 function PresetButton({

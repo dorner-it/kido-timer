@@ -152,6 +152,10 @@ pub async fn state_endpoint(
 pub struct SubmitPenaltyInput {
     pub delta_ms: i32,
     pub reason_code: Option<String>,
+    /// Optional client-generated UUID. Used as the penalty's `id` so a
+    /// retry from a flaky tablet upserts the same row instead of creating
+    /// a duplicate. Absent → server generates one (legacy behaviour).
+    pub client_id: Option<Uuid>,
 }
 
 pub async fn submit_penalty(
@@ -177,9 +181,47 @@ pub async fn submit_penalty(
         .find(|r| r.id == run_id)
         .ok_or_else(|| AppError::Internal("current_run_id references unknown run".into()))?;
 
+    let penalty_id = input.client_id.unwrap_or_else(Uuid::new_v4);
     let now = Utc::now();
+
+    // If a penalty with this client_id already exists, the request is a
+    // retry. Two cases to handle:
+    //  - Still pending: upsert with fresh inputs, preserve created_at.
+    //  - Already reviewed (approved/rejected): return the existing row
+    //    untouched. Otherwise a stale tablet retry could undo the
+    //    organizer's review.
+    if let Some(existing) = penalties::get(&state.db, active.id, penalty_id).await? {
+        if existing.decider_slot != slot {
+            return Err(AppError::Conflict(
+                "client_id belongs to a different slot".into(),
+            ));
+        }
+        if existing.status != PenaltyStatus::Pending {
+            return Ok((StatusCode::OK, Json(existing)));
+        }
+        let penalty = Penalty {
+            id: existing.id,
+            competition_id: active.id,
+            run_id: run.id,
+            team_id: run.team_id,
+            runner_id: run.runner_id,
+            decider_slot: slot,
+            delta_ms: input.delta_ms,
+            reason_code: input
+                .reason_code
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty()),
+            status: PenaltyStatus::Pending,
+            created_at: existing.created_at,
+            reviewed_at: None,
+            reviewed_by: None,
+        };
+        penalties::put(&state.db, &penalty).await?;
+        return Ok((StatusCode::OK, Json(penalty)));
+    }
+
     let penalty = Penalty {
-        id: Uuid::new_v4(),
+        id: penalty_id,
         competition_id: active.id,
         run_id: run.id,
         team_id: run.team_id,
