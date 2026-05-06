@@ -108,7 +108,19 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
           </div>
         )}
 
-        {state?.current_run ? (
+        {state?.disabled ? (
+          <div className="surface flex flex-col items-center gap-3 py-16 animate-rise">
+            <span className="label text-status-armed">Offline-Modus</span>
+            <span className="font-display text-[20px] font-medium text-ink-50">
+              Wettkampf läuft offline
+            </span>
+            <p className="text-center font-mono text-[12px] text-ink-200 max-w-sm">
+              Strafrichter sind während des Offline-Betriebs deaktiviert. Strafen werden
+              direkt am Wettkampf-Laptop entschieden und später per Datei in die Web-App
+              übernommen.
+            </p>
+          </div>
+        ) : state?.current_run ? (
           <CurrentRunBanner
             startNumber={state.current_run.team.start_number}
             teamName={state.current_run.team.name}
@@ -128,26 +140,29 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
           </div>
         )}
 
-        <section className="mt-8">
-          <span className="label">Strafen senden</span>
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 stagger-rise">
-            {PRESETS.map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                disabled={!state?.current_run || busy}
-                onClick={() => submit(p.label, p.deltaMs, p.reason)}
-                className="surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40"
-              >
-                <span className="font-stencil text-[28px] font-bold text-ink-50 leading-none">
-                  {p.label}
-                </span>
-                {p.reason && <span className="label">{p.reason}</span>}
-              </button>
-            ))}
-          </div>
-        </section>
+        {!state?.disabled && (
+          <section className="mt-8">
+            <span className="label">Strafen senden</span>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 stagger-rise">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled={!state?.current_run || busy}
+                  onClick={() => submit(p.label, p.deltaMs, p.reason)}
+                  className="surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40"
+                >
+                  <span className="font-stencil text-[28px] font-bold text-ink-50 leading-none">
+                    {p.label}
+                  </span>
+                  {p.reason && <span className="label">{p.reason}</span>}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
+        {!state?.disabled && (
         <section className="mt-10">
           <span className="label">Eigene Eingaben</span>
           {recent.length === 0 ? (
@@ -166,6 +181,7 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
             </ul>
           )}
         </section>
+        )}
       </main>
     </div>
   );

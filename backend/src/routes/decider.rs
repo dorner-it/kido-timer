@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::db::{competitions, penalties, runners, runs, teams};
 use crate::error::{AppError, AppResult};
-use crate::models::{Competition, Penalty, PenaltyStatus, Run, Runner, Team};
+use crate::models::{Competition, Penalty, PenaltyStatus, Run, Runner, SyncMode, Team};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
@@ -70,6 +70,10 @@ pub struct DeciderState {
     pub competition: PublicCompetition,
     pub slot: u8,
     pub current_run: Option<DeciderRunView>,
+    /// True iff the competition is currently in `offline` sync mode. The
+    /// pad UI renders a stub when this is set; penalty submissions are
+    /// also rejected server-side in that state.
+    pub disabled: bool,
 }
 
 #[derive(Serialize)]
@@ -91,6 +95,19 @@ pub async fn state_endpoint(
     Path((owner_sub, slot, token)): Path<(String, u8, String)>,
 ) -> AppResult<Json<DeciderState>> {
     let active = authorize(&state, &owner_sub, slot, &token).await?;
+
+    if active.sync_mode == SyncMode::Offline {
+        return Ok(Json(DeciderState {
+            competition: PublicCompetition {
+                id: active.id,
+                name: active.name,
+                mode: active.mode,
+            },
+            slot,
+            current_run: None,
+            disabled: true,
+        }));
+    }
 
     let current_run = if let Some(run_id) = active.current_run_id {
         let runs_for_comp = runs::list_for_competition(&state.db, active.id).await?;
@@ -125,6 +142,7 @@ pub async fn state_endpoint(
         },
         slot,
         current_run,
+        disabled: false,
     }))
 }
 
@@ -142,6 +160,12 @@ pub async fn submit_penalty(
     Json(input): Json<SubmitPenaltyInput>,
 ) -> AppResult<(StatusCode, Json<Penalty>)> {
     let active = authorize(&state, &owner_sub, slot, &token).await?;
+
+    if active.sync_mode == SyncMode::Offline {
+        return Err(AppError::Conflict(
+            "Wettkampf läuft offline; Strafrichter sind deaktiviert".into(),
+        ));
+    }
 
     let run_id = active
         .current_run_id
@@ -183,6 +207,12 @@ pub async fn withdraw_penalty(
     Path((owner_sub, slot, token, penalty_id)): Path<(String, u8, String, Uuid)>,
 ) -> AppResult<StatusCode> {
     let active = authorize(&state, &owner_sub, slot, &token).await?;
+
+    if active.sync_mode == SyncMode::Offline {
+        return Err(AppError::Conflict(
+            "Wettkampf läuft offline; Strafrichter sind deaktiviert".into(),
+        ));
+    }
 
     let penalty = penalties::get(&state.db, active.id, penalty_id)
         .await?

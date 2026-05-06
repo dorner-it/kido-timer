@@ -156,6 +156,14 @@ export interface DeciderState {
     team: Team;
     runner: Runner | null;
   } | null;
+  disabled: boolean;
+}
+
+export interface ImportResultsResponse {
+  runs_imported: number;
+  penalties_imported: number;
+  runs_skipped: number;
+  penalties_skipped: number;
 }
 
 // ===== client =====
@@ -247,6 +255,11 @@ export const apiClient = {
       const filename = match?.[1] ?? `kido-${id}.kido`;
       return { blob: await res.blob(), filename };
     },
+    importResults: (id: string, envelope: unknown) =>
+      request<ImportResultsResponse>(`/api/competitions/${id}/import-results`, {
+        method: 'POST',
+        body: JSON.stringify(envelope),
+      }),
   },
   teams: {
     create: (competition_id: string, input: { name: string; start_number: number }) =>

@@ -90,6 +90,30 @@ export default function CompetitionDetail({ id }: Props) {
     }
   };
 
+  const importFile = async (file: File) => {
+    setError(null);
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(await file.text());
+    } catch {
+      setError('Datei ist kein gültiges KI-DO-Format.');
+      return;
+    }
+    try {
+      const res = await apiClient.competitions.importResults(id, envelope);
+      alert(
+        `Import abgeschlossen: ${res.runs_imported} Lauf-Ergebnisse, ` +
+          `${res.penalties_imported} Strafen übernommen.` +
+          (res.runs_skipped + res.penalties_skipped > 0
+            ? ` (${res.runs_skipped + res.penalties_skipped} verworfen)`
+            : ''),
+      );
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import fehlgeschlagen');
+    }
+  };
+
   if (error) {
     return (
       <main className="mx-auto w-full max-w-6xl px-7 py-10">
@@ -143,6 +167,23 @@ export default function CompetitionDetail({ id }: Props) {
           <button type="button" onClick={exportFile} className="btn">
             Datei exportieren
           </button>
+          {competition.sync_mode === 'offline' && (
+            <label className="btn cursor-pointer">
+              Datei importieren
+              <input
+                type="file"
+                accept=".kido,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    importFile(f);
+                    e.target.value = '';
+                  }
+                }}
+              />
+            </label>
+          )}
           <button type="button" onClick={remove} className="btn btn-danger">
             Löschen
           </button>

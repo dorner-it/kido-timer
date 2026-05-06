@@ -11,10 +11,10 @@ use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
 use crate::auth::session::random_token;
-use crate::db::{competitions, runners, runs, teams, users};
+use crate::db::{competitions, penalties, runners, runs, teams, users};
 use crate::error::{AppError, AppResult};
 use crate::export;
-use crate::models::{Competition, Runner, Run, SyncMode, Team, TimerMode};
+use crate::models::{Competition, PenaltyStatus, Runner, Run, SyncMode, Team, TimerMode};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
@@ -25,6 +25,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}/current-run", post(set_current_run))
         .route("/{id}/sync-mode", post(set_sync_mode))
         .route("/{id}/export-file", get(export_file))
+        .route("/{id}/import-results", post(import_results))
         .route("/{id}/decider-tokens/rotate", post(rotate_decider_tokens))
 }
 
@@ -270,6 +271,85 @@ pub async fn export_file(
     headers.insert(header::CONTENT_DISPOSITION, disposition_value);
 
     Ok((headers, body).into_response())
+}
+
+#[derive(Serialize)]
+pub struct ImportResultsResponse {
+    pub runs_imported: usize,
+    pub penalties_imported: usize,
+    pub runs_skipped: usize,
+    pub penalties_skipped: usize,
+}
+
+pub async fn import_results(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(envelope): Json<export::Envelope>,
+) -> AppResult<Json<ImportResultsResponse>> {
+    let comp = load_owned(&state, &auth, id).await?;
+
+    if comp.sync_mode != SyncMode::Offline {
+        return Err(AppError::Conflict(
+            "Wettkampf ist nicht im Offline-Modus. Wechseln Sie zuerst in den Offline-Modus, bevor Sie Ergebnisse importieren.".into(),
+        ));
+    }
+
+    if envelope.owner_sub != auth.user.sub {
+        return Err(AppError::Forbidden);
+    }
+
+    let hmac_key = users::get_hmac_key(&state.db, &auth.user.sub).await?;
+    let payload = export::verify(&hmac_key, &envelope)?;
+
+    if payload.competition.id != id {
+        return Err(AppError::Validation(
+            "Datei gehört zu einem anderen Wettkampf".into(),
+        ));
+    }
+    if payload.owner_sub != auth.user.sub {
+        return Err(AppError::Forbidden);
+    }
+
+    let mut runs_imported = 0usize;
+    let mut runs_skipped = 0usize;
+    for run in payload.runs {
+        if run.competition_id != id {
+            runs_skipped += 1;
+            continue;
+        }
+        runs::put(&state.db, &run).await?;
+        runs_imported += 1;
+    }
+
+    let mut penalties_imported = 0usize;
+    let mut penalties_skipped = 0usize;
+    let now = Utc::now();
+    for mut penalty in payload.approved_penalties {
+        if penalty.competition_id != id {
+            penalties_skipped += 1;
+            continue;
+        }
+        // Approved penalties from the offline app are trusted: they were
+        // adjudicated by the operator on-site. Force the canonical fields
+        // even if the file shape drifts later.
+        penalty.status = PenaltyStatus::Approved;
+        if penalty.reviewed_at.is_none() {
+            penalty.reviewed_at = Some(now);
+        }
+        if penalty.reviewed_by.is_none() {
+            penalty.reviewed_by = Some("offline-import".to_string());
+        }
+        penalties::put(&state.db, &penalty).await?;
+        penalties_imported += 1;
+    }
+
+    Ok(Json(ImportResultsResponse {
+        runs_imported,
+        penalties_imported,
+        runs_skipped,
+        penalties_skipped,
+    }))
 }
 
 pub async fn rotate_decider_tokens(
