@@ -73,6 +73,23 @@ export default function CompetitionDetail({ id }: Props) {
     }
   };
 
+  const exportFile = async () => {
+    setError(null);
+    try {
+      const { blob, filename } = await apiClient.competitions.exportFile(id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export fehlgeschlagen');
+    }
+  };
+
   if (error) {
     return (
       <main className="mx-auto w-full max-w-6xl px-7 py-10">
@@ -123,6 +140,9 @@ export default function CompetitionDetail({ id }: Props) {
           <a href={`/competitions/${id}/penalties`} className="btn">
             Strafen prüfen
           </a>
+          <button type="button" onClick={exportFile} className="btn">
+            Datei exportieren
+          </button>
           <button type="button" onClick={remove} className="btn btn-danger">
             Löschen
           </button>

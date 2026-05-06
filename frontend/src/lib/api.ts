@@ -235,6 +235,18 @@ export const apiClient = {
       request<Competition>(`/api/competitions/${id}/decider-tokens/rotate`, {
         method: 'POST',
       }),
+    exportFile: async (id: string): Promise<{ blob: Blob; filename: string }> => {
+      const res = await fetch(`${API_BASE_URL}/api/competitions/${id}/export-file`, {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        throw await parseError(res);
+      }
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] ?? `kido-${id}.kido`;
+      return { blob: await res.blob(), filename };
+    },
   },
   teams: {
     create: (competition_id: string, input: { name: string; start_number: number }) =>

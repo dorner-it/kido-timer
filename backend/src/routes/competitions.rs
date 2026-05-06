@@ -2,7 +2,8 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,8 +11,9 @@ use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
 use crate::auth::session::random_token;
-use crate::db::{competitions, runners, runs, teams};
+use crate::db::{competitions, runners, runs, teams, users};
 use crate::error::{AppError, AppResult};
+use crate::export;
 use crate::models::{Competition, Runner, Run, SyncMode, Team, TimerMode};
 use crate::state::AppState;
 
@@ -22,6 +24,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}/activate", post(activate))
         .route("/{id}/current-run", post(set_current_run))
         .route("/{id}/sync-mode", post(set_sync_mode))
+        .route("/{id}/export-file", get(export_file))
         .route("/{id}/decider-tokens/rotate", post(rotate_decider_tokens))
 }
 
@@ -235,6 +238,38 @@ pub async fn set_sync_mode(
         .await?
         .ok_or_else(|| AppError::Internal("competition vanished mid-update".into()))?;
     Ok(Json(updated))
+}
+
+pub async fn export_file(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<axum::response::Response> {
+    let comp = load_owned(&state, &auth, id).await?;
+    let payload = export::build_payload(&state, &auth.user.sub, id).await?;
+    let hmac_key = users::get_hmac_key(&state.db, &auth.user.sub).await?;
+    let envelope = export::sign(&hmac_key, &payload)?;
+
+    let body = serde_json::to_vec(&envelope)
+        .map_err(|e| AppError::Internal(format!("serialize envelope: {e}")))?;
+
+    let filename = format!(
+        "kido-{}-{}.kido",
+        export::filename_slug(&comp.name),
+        comp.date,
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    let disposition_value = HeaderValue::from_str(&disposition)
+        .map_err(|e| AppError::Internal(format!("build content-disposition: {e}")))?;
+    headers.insert(header::CONTENT_DISPOSITION, disposition_value);
+
+    Ok((headers, body).into_response())
 }
 
 pub async fn rotate_decider_tokens(
