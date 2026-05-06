@@ -12,7 +12,7 @@ use crate::auth::AuthenticatedUser;
 use crate::auth::session::random_token;
 use crate::db::{competitions, runners, runs, teams};
 use crate::error::{AppError, AppResult};
-use crate::models::{Competition, Runner, Run, Team, TimerMode};
+use crate::models::{Competition, Runner, Run, SyncMode, Team, TimerMode};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
@@ -21,6 +21,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}", get(detail).put(update).delete(remove))
         .route("/{id}/activate", post(activate))
         .route("/{id}/current-run", post(set_current_run))
+        .route("/{id}/sync-mode", post(set_sync_mode))
         .route("/{id}/decider-tokens/rotate", post(rotate_decider_tokens))
 }
 
@@ -91,6 +92,7 @@ pub async fn create(
         date: input.date,
         location: input.location.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()),
         mode: input.mode,
+        sync_mode: SyncMode::Live,
         is_active: false,
         current_run_id: None,
         decider_tokens: fresh_decider_tokens(),
@@ -210,6 +212,25 @@ pub async fn set_current_run(
 ) -> AppResult<Json<Competition>> {
     load_owned(&state, &auth, id).await?;
     competitions::set_current_run(&state.db, id, input.run_id).await?;
+    let updated = competitions::get(&state.db, id)
+        .await?
+        .ok_or_else(|| AppError::Internal("competition vanished mid-update".into()))?;
+    Ok(Json(updated))
+}
+
+#[derive(Deserialize)]
+pub struct SetSyncModeInput {
+    pub sync_mode: SyncMode,
+}
+
+pub async fn set_sync_mode(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<SetSyncModeInput>,
+) -> AppResult<Json<Competition>> {
+    load_owned(&state, &auth, id).await?;
+    competitions::set_sync_mode(&state.db, id, input.sync_mode).await?;
     let updated = competitions::get(&state.db, id)
         .await?
         .ok_or_else(|| AppError::Internal("competition vanished mid-update".into()))?;

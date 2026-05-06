@@ -54,6 +54,7 @@ async function request<T>(
 // ===== domain types — mirror the backend =====
 
 export type TimerMode = 'single_lane' | 'two_lane_parallel' | 'relay' | 'individual';
+export type SyncMode = 'live' | 'offline';
 export type RunStatus = 'pending' | 'active' | 'completed' | 'cancelled';
 export type PenaltyStatus = 'pending' | 'approved' | 'rejected';
 
@@ -72,6 +73,7 @@ export interface Competition {
   date: string;
   location: string | null;
   mode: TimerMode;
+  sync_mode: SyncMode;
   is_active: boolean;
   current_run_id: string | null;
   decider_tokens: [string, string, string, string];
@@ -211,6 +213,11 @@ export const apiClient = {
       request<Competition>(`/api/competitions/${id}/current-run`, {
         method: 'POST',
         body: JSON.stringify({ run_id }),
+      }),
+    setSyncMode: (id: string, sync_mode: SyncMode) =>
+      request<Competition>(`/api/competitions/${id}/sync-mode`, {
+        method: 'POST',
+        body: JSON.stringify({ sync_mode }),
       }),
     rotateDeciderTokens: (id: string) =>
       request<Competition>(`/api/competitions/${id}/decider-tokens/rotate`, {

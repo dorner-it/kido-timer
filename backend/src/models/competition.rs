@@ -4,6 +4,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::models::sync_mode::SyncMode;
 use crate::models::timer_mode::TimerMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,8 @@ pub struct Competition {
     pub date: NaiveDate,
     pub location: Option<String>,
     pub mode: TimerMode,
+    #[serde(default)]
+    pub sync_mode: SyncMode,
     pub is_active: bool,
     pub current_run_id: Option<Uuid>,
     pub decider_tokens: [String; 4],

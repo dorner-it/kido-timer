@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::db::client::DbClient;
 use crate::db::keys;
 use crate::error::{AppError, AppResult};
-use crate::models::{Competition, TimerMode};
+use crate::models::{Competition, SyncMode, TimerMode};
 
 #[derive(Serialize, Deserialize)]
 struct CompetitionItem {
@@ -29,6 +29,8 @@ struct CompetitionItem {
     date: NaiveDate,
     location: Option<String>,
     mode: TimerMode,
+    #[serde(default)]
+    sync_mode: SyncMode,
     is_active: bool,
     current_run_id: Option<Uuid>,
     decider_tokens: [String; 4],
@@ -50,6 +52,7 @@ impl CompetitionItem {
             date: c.date,
             location: c.location.clone(),
             mode: c.mode,
+            sync_mode: c.sync_mode,
             is_active: c.is_active,
             current_run_id: c.current_run_id,
             decider_tokens: c.decider_tokens.clone(),
@@ -66,6 +69,7 @@ impl CompetitionItem {
             date: self.date,
             location: self.location,
             mode: self.mode,
+            sync_mode: self.sync_mode,
             is_active: self.is_active,
             current_run_id: self.current_run_id,
             decider_tokens: self.decider_tokens,
@@ -240,6 +244,29 @@ pub async fn set_current_run(
         .key("SK", AttributeValue::S(keys::SK_META.to_string()))
         .update_expression("SET current_run_id = :r, updated_at = :u")
         .expression_attribute_values(":r", value)
+        .expression_attribute_values(":u", AttributeValue::S(now))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
+    Ok(())
+}
+
+pub async fn set_sync_mode(
+    client: &DbClient,
+    competition_id: Uuid,
+    mode: SyncMode,
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let value = serde_dynamo::to_attribute_value(mode)
+        .map_err(|e| AppError::Internal(format!("serde_dynamo to_attribute_value: {e}")))?;
+    client
+        .inner
+        .update_item()
+        .table_name(&client.table_name)
+        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("SK", AttributeValue::S(keys::SK_META.to_string()))
+        .update_expression("SET sync_mode = :s, updated_at = :u")
+        .expression_attribute_values(":s", value)
         .expression_attribute_values(":u", AttributeValue::S(now))
         .send()
         .await

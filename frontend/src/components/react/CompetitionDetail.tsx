@@ -10,6 +10,7 @@ import {
   type CompetitionDetail as CompetitionDetailData,
   type Run,
   type Runner,
+  type SyncMode,
   type Team,
 } from '../../lib/api';
 import { formatDateDE } from '../../lib/format';
@@ -464,6 +465,7 @@ function SidePanel({
 }) {
   return (
     <aside className="flex flex-col gap-6">
+      <SyncModeCard competition={competition} onChange={onChange} />
       <CurrentRunCard
         competition={competition}
         runs={runs}
@@ -479,6 +481,85 @@ function SidePanel({
       />
       <DeciderCodesCard competition={competition} onRotate={onRotate} />
     </aside>
+  );
+}
+
+function SyncModeCard({
+  competition,
+  onChange,
+}: {
+  competition: Competition;
+  onChange: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const switchTo = async (target: SyncMode) => {
+    if (target === competition.sync_mode) return;
+    const ok = confirm(
+      target === 'offline'
+        ? 'In Offline-Modus wechseln? Strafrichter werden deaktiviert; Live-Zeiten werden nicht mehr übernommen. Ergebnisse können später per Datei importiert werden.'
+        : 'Zurück in Live-Modus wechseln? Datei-Import wird gesperrt; Strafrichter und Live-Zeiten werden wieder verarbeitet.',
+    );
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiClient.competitions.setSyncMode(competition.id, target);
+      await onChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Wechsel fehlgeschlagen');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isLive = competition.sync_mode === 'live';
+
+  return (
+    <div className="surface p-5">
+      <div className="flex items-center justify-between">
+        <span className="label">Sync-Modus</span>
+        <span
+          className={`pill ${
+            isLive
+              ? 'bg-status-running/15 text-status-running'
+              : 'bg-status-armed/15 text-status-armed'
+          }`}
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+          {isLive ? 'Live' : 'Offline'}
+        </span>
+      </div>
+      <p className="mt-2 font-mono text-[11px] text-ink-200">
+        {isLive
+          ? 'Desktop-App schickt Live-Zeiten direkt an die Web-App. Strafrichter aktiv.'
+          : 'Wettkampf läuft offline auf der Desktop-App. Strafrichter sind deaktiviert. Ergebnisse später als Datei importieren.'}
+      </p>
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          className={`btn flex-1 ${isLive ? 'btn-primary' : ''}`}
+          onClick={() => switchTo('live')}
+          disabled={busy || isLive}
+        >
+          Live
+        </button>
+        <button
+          type="button"
+          className={`btn flex-1 ${!isLive ? 'btn-primary' : ''}`}
+          onClick={() => switchTo('offline')}
+          disabled={busy || !isLive}
+        >
+          Offline
+        </button>
+      </div>
+      {error && (
+        <p className="mt-2 text-[11px] text-status-unknown" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
