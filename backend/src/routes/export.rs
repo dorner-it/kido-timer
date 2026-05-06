@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::ApiKeyAuth;
-use crate::db::{competitions, runs};
+use crate::db::{competitions, runs, users};
 use crate::error::{AppError, AppResult};
 use crate::export;
 use crate::models::{Run, RunStatus, SyncMode};
@@ -24,12 +24,54 @@ use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
+        .route("/me", get(me))
+        .route("/me/hmac-key", get(hmac_key))
         .route("/competitions", get(list_competitions))
         .route("/competitions/{id}", get(competition_snapshot))
         .route(
             "/competitions/{id}/runs/{run_id}/result",
             post(submit_run_result),
         )
+}
+
+#[derive(Serialize)]
+pub struct DesktopMe {
+    pub sub: String,
+    pub email: String,
+    pub display_name: String,
+    pub key_id: String,
+}
+
+/// Sanity / who-am-I check for the desktop app. Returns the user
+/// identity the API key is bound to, plus the key's row id.
+pub async fn me(auth: ApiKeyAuth) -> Json<DesktopMe> {
+    Json(DesktopMe {
+        sub: auth.user.sub,
+        email: auth.user.email,
+        display_name: auth.user.display_name,
+        key_id: auth.key_id,
+    })
+}
+
+#[derive(Serialize)]
+pub struct HmacKeyResponse {
+    /// Base64url (no padding) encoded 32-byte HMAC-SHA256 key. Required
+    /// to sign offline result files before re-uploading them via
+    /// `POST /api/competitions/:id/import-results`.
+    pub hmac_key: String,
+}
+
+/// Returns the per-user HMAC signing key. The desktop app fetches this
+/// once after the operator pairs an API key, caches it locally
+/// (e.g. OS keychain), and uses it to sign offline `.kido` files it
+/// produces. Rotating the user's key (TBD) invalidates outstanding
+/// files; the desktop must re-fetch.
+pub async fn hmac_key(
+    State(state): State<AppState>,
+    auth: ApiKeyAuth,
+) -> AppResult<Json<HmacKeyResponse>> {
+    let key = users::get_hmac_key(&state.db, &auth.user.sub).await?;
+    Ok(Json(HmacKeyResponse { hmac_key: key }))
 }
 
 #[derive(Serialize)]
