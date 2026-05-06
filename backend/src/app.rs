@@ -37,5 +37,6 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/users", routes::users::router())
         .nest("/api/competitions", competitions_router())
         .nest("/api/decider", routes::decider::router())
+        .nest("/api/export", routes::export::router())
         .with_state(state)
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, apiClient, type DeciderState } from '../../lib/api';
+import { formatTimeMs } from '../../lib/format';
 import { Brandmark } from './Brandmark';
 
 export interface DeciderPadProps {
@@ -130,6 +131,8 @@ export default function DeciderPad({ ownerSub, slot: slotStr, token }: DeciderPa
                 : null
             }
             runNumber={state.current_run.run.run_number}
+            originalTimeMs={state.current_run.run.original_time_ms}
+            status={state.current_run.run.status}
           />
         ) : (
           <div className="surface flex flex-col items-center gap-2 py-12 animate-rise">
@@ -192,23 +195,36 @@ function CurrentRunBanner(props: {
   teamName: string;
   runnerName: string | null;
   runNumber: number;
+  originalTimeMs: number | null;
+  status: string;
 }) {
-  const { startNumber, teamName, runnerName, runNumber } = props;
+  const { startNumber, teamName, runnerName, runNumber, originalTimeMs, status } = props;
+  const showTime = originalTimeMs != null;
   return (
     <div className="surface relative overflow-hidden p-7 animate-rise">
-      <div className="flex items-center gap-5">
-        <span className="font-stencil text-[64px] font-bold leading-none text-signal-glow tnum">
-          {startNumber.toString().padStart(2, '0')}
-        </span>
-        <div className="flex flex-col gap-1">
-          <span className="label">Lauf {runNumber}</span>
-          <span className="font-display text-[26px] font-semibold leading-tight text-ink-50">
-            {teamName}
+      <div className="flex items-center justify-between gap-5">
+        <div className="flex items-center gap-5">
+          <span className="font-stencil text-[64px] font-bold leading-none text-signal-glow tnum">
+            {startNumber.toString().padStart(2, '0')}
           </span>
-          {runnerName && (
-            <span className="font-mono text-[13px] text-ink-200">{runnerName}</span>
-          )}
+          <div className="flex flex-col gap-1">
+            <span className="label">Lauf {runNumber}</span>
+            <span className="font-display text-[26px] font-semibold leading-tight text-ink-50">
+              {teamName}
+            </span>
+            {runnerName && (
+              <span className="font-mono text-[13px] text-ink-200">{runnerName}</span>
+            )}
+          </div>
         </div>
+        {showTime && (
+          <div className="flex flex-col items-end leading-tight">
+            <span className="label">{status === 'completed' ? 'Endzeit' : 'Aktuell'}</span>
+            <span className="font-stencil text-[40px] font-bold leading-none text-signal-glow tnum">
+              {formatTimeMs(originalTimeMs)}
+            </span>
+          </div>
+        )}
       </div>
       <div className="scanlines pointer-events-none absolute inset-0 opacity-50" />
     </div>

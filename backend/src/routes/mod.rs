@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod competitions;
 pub mod decider;
+pub mod export;
 pub mod penalties;
 pub mod runners;
 pub mod runs;

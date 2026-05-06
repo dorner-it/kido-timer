@@ -148,6 +148,63 @@ pub async fn list_for_competition(
     Ok(runs)
 }
 
+pub struct TimingUpdate {
+    pub competition_id: Uuid,
+    pub run_number: u32,
+    pub run_id: Uuid,
+    pub original_time_ms: Option<u32>,
+    pub status: RunStatus,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+}
+
+/// Apply a timing update from the desktop ingest endpoint. Touches only
+/// `original_time_ms`, `status`, `started_at`, `ended_at`, plus the GSI1SK
+/// (which is derived from `status` and `run_number`) and `updated_at` —
+/// `correction_ms`, `team_id`, `runner_id`, `lane` are preserved.
+pub async fn update_timing(client: &DbClient, u: TimingUpdate) -> AppResult<()> {
+    let now = Utc::now();
+    let started = match u.started_at {
+        Some(t) => AttributeValue::S(t.to_rfc3339()),
+        None => AttributeValue::Null(true),
+    };
+    let ended = match u.ended_at {
+        Some(t) => AttributeValue::S(t.to_rfc3339()),
+        None => AttributeValue::Null(true),
+    };
+    let original = match u.original_time_ms {
+        Some(ms) => AttributeValue::N(ms.to_string()),
+        None => AttributeValue::Null(true),
+    };
+
+    client
+        .inner
+        .update_item()
+        .table_name(&client.table_name)
+        .key("PK", AttributeValue::S(keys::competition_pk(u.competition_id)))
+        .key(
+            "SK",
+            AttributeValue::S(keys::competition_sk_run(u.run_number, u.run_id)),
+        )
+        .update_expression(
+            "SET original_time_ms = :o, #s = :st, started_at = :sa, ended_at = :ea, GSI1SK = :gsk, updated_at = :u",
+        )
+        .expression_attribute_names("#s", "status")
+        .expression_attribute_values(":o", original)
+        .expression_attribute_values(":st", AttributeValue::S(u.status.as_str().to_string()))
+        .expression_attribute_values(":sa", started)
+        .expression_attribute_values(":ea", ended)
+        .expression_attribute_values(
+            ":gsk",
+            AttributeValue::S(keys::run_status_gsi1sk(u.status.as_str(), u.run_number)),
+        )
+        .expression_attribute_values(":u", AttributeValue::S(now.to_rfc3339()))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
+    Ok(())
+}
+
 /// Update only the `correction_ms` and `updated_at` fields. Used after a
 /// penalty is approved/rejected so we don't have to re-write the whole row.
 pub async fn update_correction_ms(

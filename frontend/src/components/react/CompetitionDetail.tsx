@@ -13,7 +13,7 @@ import {
   type SyncMode,
   type Team,
 } from '../../lib/api';
-import { formatDateDE } from '../../lib/format';
+import { formatDateDE, formatTimeMs } from '../../lib/format';
 
 interface Props {
   id: string;
@@ -26,6 +26,13 @@ export default function CompetitionDetail({ id }: Props) {
   useEffect(() => {
     refresh();
   }, [id]);
+
+  // Poll every 5s while the competition is live so live-pushed times appear.
+  useEffect(() => {
+    if (data?.competition.sync_mode !== 'live') return;
+    const t = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(t);
+  }, [id, data?.competition.sync_mode]);
 
   const refresh = async () => {
     try {
@@ -752,6 +759,10 @@ function RunsList({
             .sort((a, b) => a.run_number - b.run_number)
             .map((r) => {
               const team = teams.find((t) => t.id === r.team_id);
+              const finalMs =
+                r.original_time_ms != null
+                  ? r.original_time_ms + r.correction_ms
+                  : null;
               return (
                 <li key={r.id} className="flex items-center justify-between gap-3 py-2">
                   <div className="flex items-center gap-3">
@@ -762,6 +773,18 @@ function RunsList({
                       {team?.name ?? '?'}
                     </span>
                     <RunStatusPill status={r.status} />
+                    {r.original_time_ms != null && (
+                      <span
+                        className="font-stencil text-[14px] font-bold tnum text-signal-glow"
+                        title={
+                          r.correction_ms !== 0
+                            ? `Roh ${formatTimeMs(r.original_time_ms)} · Korrektur ${(r.correction_ms / 1000).toFixed(2)} s`
+                            : undefined
+                        }
+                      >
+                        {formatTimeMs(finalMs)}
+                      </span>
+                    )}
                   </div>
                   {r.status === 'pending' && (
                     <button type="button" className="btn btn-primary" onClick={() => start(r)}>
