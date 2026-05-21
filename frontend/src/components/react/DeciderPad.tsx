@@ -47,7 +47,8 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
 
-  const presets = state ? PRESETS_BY_MODE[state.competition.mode] : [];
+  const presets =
+    state && state.discipline ? PRESETS_BY_MODE[state.discipline.mode] : [];
 
   // Promote drained-queue items to the confirmed list so the operator
   // sees their late-arriving entries with a withdraw button.
@@ -185,8 +186,13 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
           <div className="flex flex-col leading-tight">
             <span className="label">Strafrichter</span>
             <span className="font-display text-[14px] text-ink-50">
-              {state?.competition.name ?? '—'}
+              {state?.event.name ?? '—'}
             </span>
+            {state?.discipline && (
+              <span className="font-mono text-[11px] text-ink-200">
+                {state.discipline.name}
+              </span>
+            )}
           </div>
         </div>
         <ConnectivityPill online={online} pending={queued.length} draining={draining} />
@@ -219,7 +225,6 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
           </div>
         ) : state?.current_run ? (
           <CurrentRunBanner
-            startNumber={state.current_run.team.start_number}
             teamName={state.current_run.team.name}
             runnerName={
               state.current_run.runner
@@ -269,9 +274,9 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
               </button>
             </div>
 
-            {customOpen && (
+            {customOpen && state.discipline && (
               <CustomPenaltyForm
-                mode={state!.competition.mode}
+                mode={state.discipline.mode}
                 disabled={!state?.current_run || busy}
                 flashing={flashKey === 'custom'}
                 onSubmit={async (seconds, reasonCode) => {
@@ -339,21 +344,20 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
 }
 
 function CurrentRunBanner(props: {
-  startNumber: number;
   teamName: string;
   runnerName: string | null;
   runNumber: number;
   originalTimeMs: number | null;
   status: string;
 }) {
-  const { startNumber, teamName, runnerName, runNumber, originalTimeMs, status } = props;
+  const { teamName, runnerName, runNumber, originalTimeMs, status } = props;
   const showTime = originalTimeMs != null;
   return (
     <div className="surface relative overflow-hidden p-7 animate-rise">
       <div className="flex items-center justify-between gap-5">
         <div className="flex items-center gap-5">
           <span className="font-stencil text-[64px] font-bold leading-none text-signal-glow tnum">
-            {startNumber.toString().padStart(2, '0')}
+            {runNumber.toString().padStart(2, '0')}
           </span>
           <div className="flex flex-col gap-1">
             <span className="label">Lauf {runNumber}</span>

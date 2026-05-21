@@ -3,7 +3,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import LoginForm from '../components/react/LoginForm.tsx';
 ---
 
-<BaseLayout title="Anmelden – KI-DO Timer" bare>
+<BaseLayout title="Anmelden – KI-DO Timer" bare auth="guest-only">
   <main class="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
     <aside class="relative hidden overflow-hidden lg:flex">
       <div
