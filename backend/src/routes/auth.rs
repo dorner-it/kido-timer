@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::AuthenticatedUser;
 use crate::auth::cognito::{SignInOutcome, TokenSet};
 use crate::auth::jwt;
-use crate::auth::session::{COOKIE_NAME, random_token, session_ttl};
+use crate::auth::session::{COOKIE_NAME, PRESENCE_COOKIE_NAME, random_token, session_ttl};
 use crate::db::{sessions, users};
 use crate::error::{AppError, AppResult};
 use crate::models::User;
@@ -161,7 +161,9 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> AppResult<
 
     let mut clear = Cookie::from(COOKIE_NAME);
     clear.set_path("/");
-    let jar = jar.remove(clear);
+    let mut clear_marker = Cookie::from(PRESENCE_COOKIE_NAME);
+    clear_marker.set_path("/");
+    let jar = jar.remove(clear).remove(clear_marker);
 
     Ok((jar, axum::response::Redirect::to("/login")).into_response())
 }
@@ -204,8 +206,9 @@ async fn open_session(
     )
     .await?;
 
-    let cookie = build_session_cookie(state, session_id);
-    Ok((jar.add(cookie), user))
+    let session_cookie = build_session_cookie(state, session_id);
+    let presence_cookie = build_presence_cookie(state);
+    Ok((jar.add(session_cookie).add(presence_cookie), user))
 }
 
 fn build_session_cookie(state: &AppState, session_id: String) -> Cookie<'static> {
@@ -214,6 +217,18 @@ fn build_session_cookie(state: &AppState, session_id: String) -> Cookie<'static>
     Cookie::build((COOKIE_NAME, session_id))
         .path("/")
         .http_only(true)
+        .secure(secure)
+        .same_site(SameSite::Lax)
+        .max_age(time::Duration::days(30))
+        .build()
+}
+
+fn build_presence_cookie(state: &AppState) -> Cookie<'static> {
+    let secure = state.config.env == "prod";
+
+    Cookie::build((PRESENCE_COOKIE_NAME, "1"))
+        .path("/")
+        .http_only(false)
         .secure(secure)
         .same_site(SameSite::Lax)
         .max_age(time::Duration::days(30))

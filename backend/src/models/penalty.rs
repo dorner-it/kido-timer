@@ -25,7 +25,8 @@ impl PenaltyStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Penalty {
     pub id: Uuid,
-    pub competition_id: Uuid,
+    pub event_id: Uuid,
+    pub discipline_id: Uuid,
     pub run_id: Uuid,
     pub team_id: Uuid,
     pub runner_id: Option<Uuid>,

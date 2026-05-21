@@ -24,7 +24,8 @@ struct RunItem {
     gsi1sk: String,
 
     id: Uuid,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
     team_id: Uuid,
     runner_id: Option<Uuid>,
     run_number: u32,
@@ -41,13 +42,14 @@ struct RunItem {
 impl RunItem {
     fn from_run(r: &Run) -> Self {
         Self {
-            pk: keys::competition_pk(r.competition_id),
-            sk: keys::competition_sk_run(r.run_number, r.id),
-            gsi1pk: keys::run_status_gsi1pk(r.competition_id),
-            gsi1sk: keys::run_status_gsi1sk(r.status.as_str(), r.run_number),
+            pk: keys::event_pk(r.event_id),
+            sk: keys::event_sk_run(r.discipline_id, r.run_number, r.id),
+            gsi1pk: keys::run_status_gsi1pk(r.event_id),
+            gsi1sk: keys::run_status_gsi1sk(r.status.as_str(), r.discipline_id, r.run_number),
 
             id: r.id,
-            competition_id: r.competition_id,
+            event_id: r.event_id,
+            discipline_id: r.discipline_id,
             team_id: r.team_id,
             runner_id: r.runner_id,
             run_number: r.run_number,
@@ -65,7 +67,8 @@ impl RunItem {
     fn into_run(self) -> Run {
         Run {
             id: self.id,
-            competition_id: self.competition_id,
+            event_id: self.event_id,
+            discipline_id: self.discipline_id,
             team_id: self.team_id,
             runner_id: self.runner_id,
             run_number: self.run_number,
@@ -98,7 +101,8 @@ pub async fn put(client: &DbClient, run: &Run) -> AppResult<()> {
 
 pub async fn get(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
     run_number: u32,
     run_id: Uuid,
 ) -> AppResult<Option<Run>> {
@@ -106,10 +110,10 @@ pub async fn get(
         .inner
         .get_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
         .key(
             "SK",
-            AttributeValue::S(keys::competition_sk_run(run_number, run_id)),
+            AttributeValue::S(keys::event_sk_run(discipline_id, run_number, run_id)),
         )
         .send()
         .await
@@ -123,33 +127,46 @@ pub async fn get(
     Ok(Some(parsed.into_run()))
 }
 
-pub async fn list_for_competition(
+pub async fn list_for_event(client: &DbClient, event_id: Uuid) -> AppResult<Vec<Run>> {
+    let res = client
+        .inner
+        .query()
+        .table_name(&client.table_name)
+        .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
+        .expression_attribute_values(":pk", AttributeValue::S(keys::event_pk(event_id)))
+        .expression_attribute_values(":prefix", AttributeValue::S("RUN#".to_string()))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
+
+    parse_items(res.items.unwrap_or_default())
+}
+
+pub async fn list_for_discipline(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
 ) -> AppResult<Vec<Run>> {
     let res = client
         .inner
         .query()
         .table_name(&client.table_name)
         .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
-        .expression_attribute_values(":pk", AttributeValue::S(keys::competition_pk(competition_id)))
-        .expression_attribute_values(":prefix", AttributeValue::S("RUN#".to_string()))
+        .expression_attribute_values(":pk", AttributeValue::S(keys::event_pk(event_id)))
+        .expression_attribute_values(
+            ":prefix",
+            AttributeValue::S(keys::event_sk_run_prefix_for_discipline(discipline_id)),
+        )
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
 
-    let items = res.items.unwrap_or_default();
-    let mut runs = Vec::with_capacity(items.len());
-    for item in items {
-        let parsed: RunItem = serde_dynamo::from_item(item)
-            .map_err(|e| AppError::Internal(format!("serde_dynamo from_item: {e}")))?;
-        runs.push(parsed.into_run());
-    }
-    Ok(runs)
+    parse_items(res.items.unwrap_or_default())
 }
 
 pub struct TimingUpdate {
-    pub competition_id: Uuid,
+    pub event_id: Uuid,
+    pub discipline_id: Uuid,
     pub run_number: u32,
     pub run_id: Uuid,
     pub original_time_ms: Option<u32>,
@@ -158,10 +175,6 @@ pub struct TimingUpdate {
     pub ended_at: Option<DateTime<Utc>>,
 }
 
-/// Apply a timing update from the desktop ingest endpoint. Touches only
-/// `original_time_ms`, `status`, `started_at`, `ended_at`, plus the GSI1SK
-/// (which is derived from `status` and `run_number`) and `updated_at` —
-/// `correction_ms`, `team_id`, `runner_id`, `lane` are preserved.
 pub async fn update_timing(client: &DbClient, u: TimingUpdate) -> AppResult<()> {
     let now = Utc::now();
     let started = match u.started_at {
@@ -181,10 +194,10 @@ pub async fn update_timing(client: &DbClient, u: TimingUpdate) -> AppResult<()> 
         .inner
         .update_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(u.competition_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(u.event_id)))
         .key(
             "SK",
-            AttributeValue::S(keys::competition_sk_run(u.run_number, u.run_id)),
+            AttributeValue::S(keys::event_sk_run(u.discipline_id, u.run_number, u.run_id)),
         )
         .update_expression(
             "SET original_time_ms = :o, #s = :st, started_at = :sa, ended_at = :ea, GSI1SK = :gsk, updated_at = :u",
@@ -196,7 +209,11 @@ pub async fn update_timing(client: &DbClient, u: TimingUpdate) -> AppResult<()> 
         .expression_attribute_values(":ea", ended)
         .expression_attribute_values(
             ":gsk",
-            AttributeValue::S(keys::run_status_gsi1sk(u.status.as_str(), u.run_number)),
+            AttributeValue::S(keys::run_status_gsi1sk(
+                u.status.as_str(),
+                u.discipline_id,
+                u.run_number,
+            )),
         )
         .expression_attribute_values(":u", AttributeValue::S(now.to_rfc3339()))
         .send()
@@ -205,11 +222,10 @@ pub async fn update_timing(client: &DbClient, u: TimingUpdate) -> AppResult<()> 
     Ok(())
 }
 
-/// Update only the `correction_ms` and `updated_at` fields. Used after a
-/// penalty is approved/rejected so we don't have to re-write the whole row.
 pub async fn update_correction_ms(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
     run_number: u32,
     run_id: Uuid,
     correction_ms: i32,
@@ -219,10 +235,10 @@ pub async fn update_correction_ms(
         .inner
         .update_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
         .key(
             "SK",
-            AttributeValue::S(keys::competition_sk_run(run_number, run_id)),
+            AttributeValue::S(keys::event_sk_run(discipline_id, run_number, run_id)),
         )
         .update_expression("SET correction_ms = :c, updated_at = :u")
         .expression_attribute_values(":c", AttributeValue::N(correction_ms.to_string()))
@@ -231,4 +247,14 @@ pub async fn update_correction_ms(
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
     Ok(())
+}
+
+fn parse_items(items: Vec<HashMap<String, AttributeValue>>) -> AppResult<Vec<Run>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let parsed: RunItem = serde_dynamo::from_item(item)
+            .map_err(|e| AppError::Internal(format!("serde_dynamo from_item: {e}")))?;
+        out.push(parsed.into_run());
+    }
+    Ok(out)
 }

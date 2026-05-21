@@ -10,10 +10,10 @@ use uuid::Uuid;
 use crate::db::client::DbClient;
 use crate::db::keys;
 use crate::error::{AppError, AppResult};
-use crate::models::{Competition, SyncMode, TimerMode};
+use crate::models::Event;
 
 #[derive(Serialize, Deserialize)]
-struct CompetitionItem {
+struct EventItem {
     #[serde(rename = "PK")]
     pk: String,
     #[serde(rename = "SK")]
@@ -28,49 +28,45 @@ struct CompetitionItem {
     name: String,
     date: NaiveDate,
     location: Option<String>,
-    mode: TimerMode,
-    #[serde(default)]
-    sync_mode: SyncMode,
     is_active: bool,
+    current_discipline_id: Option<Uuid>,
     current_run_id: Option<Uuid>,
     decider_tokens: [String; 4],
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-impl CompetitionItem {
-    fn from_competition(c: &Competition) -> Self {
+impl EventItem {
+    fn from_event(e: &Event) -> Self {
         Self {
-            pk: keys::competition_pk(c.id),
+            pk: keys::event_pk(e.id),
             sk: keys::SK_META.to_string(),
-            gsi1pk: keys::user_owned_competitions_gsi1pk(&c.owner_sub),
-            gsi1sk: keys::user_competitions_gsi1sk(c.date, c.id),
+            gsi1pk: keys::user_owned_events_gsi1pk(&e.owner_sub),
+            gsi1sk: keys::user_events_gsi1sk(e.date, e.id),
 
-            id: c.id,
-            owner_sub: c.owner_sub.clone(),
-            name: c.name.clone(),
-            date: c.date,
-            location: c.location.clone(),
-            mode: c.mode,
-            sync_mode: c.sync_mode,
-            is_active: c.is_active,
-            current_run_id: c.current_run_id,
-            decider_tokens: c.decider_tokens.clone(),
-            created_at: c.created_at,
-            updated_at: c.updated_at,
+            id: e.id,
+            owner_sub: e.owner_sub.clone(),
+            name: e.name.clone(),
+            date: e.date,
+            location: e.location.clone(),
+            is_active: e.is_active,
+            current_discipline_id: e.current_discipline_id,
+            current_run_id: e.current_run_id,
+            decider_tokens: e.decider_tokens.clone(),
+            created_at: e.created_at,
+            updated_at: e.updated_at,
         }
     }
 
-    fn into_competition(self) -> Competition {
-        Competition {
+    fn into_event(self) -> Event {
+        Event {
             id: self.id,
             owner_sub: self.owner_sub,
             name: self.name,
             date: self.date,
             location: self.location,
-            mode: self.mode,
-            sync_mode: self.sync_mode,
             is_active: self.is_active,
+            current_discipline_id: self.current_discipline_id,
             current_run_id: self.current_run_id,
             decider_tokens: self.decider_tokens,
             created_at: self.created_at,
@@ -79,10 +75,9 @@ impl CompetitionItem {
     }
 }
 
-pub async fn put(client: &DbClient, competition: &Competition) -> AppResult<()> {
-    let item: HashMap<String, AttributeValue> =
-        serde_dynamo::to_item(CompetitionItem::from_competition(competition))
-            .map_err(|e| AppError::Internal(format!("serde_dynamo to_item: {e}")))?;
+pub async fn put(client: &DbClient, event: &Event) -> AppResult<()> {
+    let item: HashMap<String, AttributeValue> = serde_dynamo::to_item(EventItem::from_event(event))
+        .map_err(|e| AppError::Internal(format!("serde_dynamo to_item: {e}")))?;
 
     client
         .inner
@@ -95,12 +90,12 @@ pub async fn put(client: &DbClient, competition: &Competition) -> AppResult<()> 
     Ok(())
 }
 
-pub async fn get(client: &DbClient, id: Uuid) -> AppResult<Option<Competition>> {
+pub async fn get(client: &DbClient, id: Uuid) -> AppResult<Option<Event>> {
     let res = client
         .inner
         .get_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(id)))
+        .key("PK", AttributeValue::S(keys::event_pk(id)))
         .key("SK", AttributeValue::S(keys::SK_META.to_string()))
         .send()
         .await
@@ -109,10 +104,9 @@ pub async fn get(client: &DbClient, id: Uuid) -> AppResult<Option<Competition>> 
     let Some(item) = res.item else {
         return Ok(None);
     };
-
-    let parsed: CompetitionItem = serde_dynamo::from_item(item)
+    let parsed: EventItem = serde_dynamo::from_item(item)
         .map_err(|e| AppError::Internal(format!("serde_dynamo from_item: {e}")))?;
-    Ok(Some(parsed.into_competition()))
+    Ok(Some(parsed.into_event()))
 }
 
 pub async fn delete(client: &DbClient, id: Uuid) -> AppResult<()> {
@@ -120,7 +114,7 @@ pub async fn delete(client: &DbClient, id: Uuid) -> AppResult<()> {
         .inner
         .delete_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(id)))
+        .key("PK", AttributeValue::S(keys::event_pk(id)))
         .key("SK", AttributeValue::S(keys::SK_META.to_string()))
         .send()
         .await
@@ -128,13 +122,14 @@ pub async fn delete(client: &DbClient, id: Uuid) -> AppResult<()> {
     Ok(())
 }
 
-/// Delete the competition META row plus every Team / Runner / Run / Penalty
-/// row underneath it. Two phases: query everything under PK = COMP#<id>,
-/// then chunked BatchWriteItem deletes (DDB caps each batch at 25).
+/// Delete the event META row plus every child row (Discipline, Team,
+/// TeamEntry, Runner, Run, Penalty) underneath it. Two phases: query
+/// everything under `PK = EVENT#<id>`, then chunked BatchWriteItem
+/// deletes (DDB caps each batch at 25).
 pub async fn cascade_delete(client: &DbClient, id: Uuid) -> AppResult<()> {
     use aws_sdk_dynamodb::types::{DeleteRequest, WriteRequest};
 
-    let pk = keys::competition_pk(id);
+    let pk = keys::event_pk(id);
     let mut last_evaluated: Option<HashMap<String, AttributeValue>> = None;
     let mut all_keys: Vec<(String, String)> = Vec::new();
 
@@ -196,25 +191,25 @@ pub async fn cascade_delete(client: &DbClient, id: Uuid) -> AppResult<()> {
     Ok(())
 }
 
-/// Sets is_active=true on the target competition and is_active=false on every
-/// other competition the same owner has. Two-phase update; not transactional,
-/// but acceptable for v1 with at most a few dozen competitions per user.
+/// Sets `is_active = true` on the target event and `false` on every other
+/// event the same owner has. Not transactional but acceptable for v1 with
+/// at most a few dozen events per user.
 pub async fn activate_exclusive(
     client: &DbClient,
     owner_sub: &str,
     target_id: Uuid,
 ) -> AppResult<()> {
-    let competitions = list_for_owner(client, owner_sub).await?;
-    for c in competitions {
-        let should_be_active = c.id == target_id;
-        if c.is_active == should_be_active {
+    let events = list_for_owner(client, owner_sub).await?;
+    for e in events {
+        let should_be_active = e.id == target_id;
+        if e.is_active == should_be_active {
             continue;
         }
         client
             .inner
             .update_item()
             .table_name(&client.table_name)
-            .key("PK", AttributeValue::S(keys::competition_pk(c.id)))
+            .key("PK", AttributeValue::S(keys::event_pk(e.id)))
             .key("SK", AttributeValue::S(keys::SK_META.to_string()))
             .update_expression("SET is_active = :a, updated_at = :u")
             .expression_attribute_values(":a", AttributeValue::Bool(should_be_active))
@@ -226,13 +221,18 @@ pub async fn activate_exclusive(
     Ok(())
 }
 
-pub async fn set_current_run(
+pub async fn set_current(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Option<Uuid>,
     run_id: Option<Uuid>,
 ) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
-    let value = match run_id {
+    let disc_value = match discipline_id {
+        Some(id) => AttributeValue::S(id.to_string()),
+        None => AttributeValue::Null(true),
+    };
+    let run_value = match run_id {
         Some(id) => AttributeValue::S(id.to_string()),
         None => AttributeValue::Null(true),
     };
@@ -240,33 +240,13 @@ pub async fn set_current_run(
         .inner
         .update_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
         .key("SK", AttributeValue::S(keys::SK_META.to_string()))
-        .update_expression("SET current_run_id = :r, updated_at = :u")
-        .expression_attribute_values(":r", value)
-        .expression_attribute_values(":u", AttributeValue::S(now))
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
-    Ok(())
-}
-
-pub async fn set_sync_mode(
-    client: &DbClient,
-    competition_id: Uuid,
-    mode: SyncMode,
-) -> AppResult<()> {
-    let now = Utc::now().to_rfc3339();
-    let value = serde_dynamo::to_attribute_value(mode)
-        .map_err(|e| AppError::Internal(format!("serde_dynamo to_attribute_value: {e}")))?;
-    client
-        .inner
-        .update_item()
-        .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
-        .key("SK", AttributeValue::S(keys::SK_META.to_string()))
-        .update_expression("SET sync_mode = :s, updated_at = :u")
-        .expression_attribute_values(":s", value)
+        .update_expression(
+            "SET current_discipline_id = :d, current_run_id = :r, updated_at = :u",
+        )
+        .expression_attribute_values(":d", disc_value)
+        .expression_attribute_values(":r", run_value)
         .expression_attribute_values(":u", AttributeValue::S(now))
         .send()
         .await
@@ -276,7 +256,7 @@ pub async fn set_sync_mode(
 
 pub async fn rotate_decider_tokens(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
     tokens: [String; 4],
 ) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
@@ -285,7 +265,7 @@ pub async fn rotate_decider_tokens(
         .inner
         .update_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
         .key("SK", AttributeValue::S(keys::SK_META.to_string()))
         .update_expression("SET decider_tokens = :t, updated_at = :u")
         .expression_attribute_values(":t", av)
@@ -296,7 +276,7 @@ pub async fn rotate_decider_tokens(
     Ok(())
 }
 
-pub async fn list_for_owner(client: &DbClient, owner_sub: &str) -> AppResult<Vec<Competition>> {
+pub async fn list_for_owner(client: &DbClient, owner_sub: &str) -> AppResult<Vec<Event>> {
     let res = client
         .inner
         .query()
@@ -307,19 +287,19 @@ pub async fn list_for_owner(client: &DbClient, owner_sub: &str) -> AppResult<Vec
         .expression_attribute_names("#sk", "GSI1SK")
         .expression_attribute_values(
             ":pk",
-            AttributeValue::S(keys::user_owned_competitions_gsi1pk(owner_sub)),
+            AttributeValue::S(keys::user_owned_events_gsi1pk(owner_sub)),
         )
-        .expression_attribute_values(":prefix", AttributeValue::S("COMP#".to_string()))
+        .expression_attribute_values(":prefix", AttributeValue::S("EVENT#".to_string()))
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
 
     let items = res.items.unwrap_or_default();
-    let mut competitions = Vec::with_capacity(items.len());
+    let mut events = Vec::with_capacity(items.len());
     for item in items {
-        let parsed: CompetitionItem = serde_dynamo::from_item(item)
+        let parsed: EventItem = serde_dynamo::from_item(item)
             .map_err(|e| AppError::Internal(format!("serde_dynamo from_item: {e}")))?;
-        competitions.push(parsed.into_competition());
+        events.push(parsed.into_event());
     }
-    Ok(competitions)
+    Ok(events)
 }

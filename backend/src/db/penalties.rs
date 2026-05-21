@@ -24,7 +24,8 @@ struct PenaltyItem {
     gsi1sk: String,
 
     id: Uuid,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
     run_id: Uuid,
     team_id: Uuid,
     runner_id: Option<Uuid>,
@@ -40,13 +41,14 @@ struct PenaltyItem {
 impl PenaltyItem {
     fn from_penalty(p: &Penalty) -> Self {
         Self {
-            pk: keys::competition_pk(p.competition_id),
-            sk: keys::competition_sk_penalty(p.id),
-            gsi1pk: keys::penalty_status_gsi1pk(p.competition_id),
+            pk: keys::event_pk(p.event_id),
+            sk: keys::event_sk_penalty(p.discipline_id, p.id),
+            gsi1pk: keys::penalty_status_gsi1pk(p.event_id),
             gsi1sk: keys::penalty_status_gsi1sk(p.status.as_str(), p.created_at),
 
             id: p.id,
-            competition_id: p.competition_id,
+            event_id: p.event_id,
+            discipline_id: p.discipline_id,
             run_id: p.run_id,
             team_id: p.team_id,
             runner_id: p.runner_id,
@@ -63,7 +65,8 @@ impl PenaltyItem {
     fn into_penalty(self) -> Penalty {
         Penalty {
             id: self.id,
-            competition_id: self.competition_id,
+            event_id: self.event_id,
+            discipline_id: self.discipline_id,
             run_id: self.run_id,
             team_id: self.team_id,
             runner_id: self.runner_id,
@@ -96,15 +99,19 @@ pub async fn put(client: &DbClient, penalty: &Penalty) -> AppResult<()> {
 
 pub async fn get(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
     penalty_id: Uuid,
 ) -> AppResult<Option<Penalty>> {
     let res = client
         .inner
         .get_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
-        .key("SK", AttributeValue::S(keys::competition_sk_penalty(penalty_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
+        .key(
+            "SK",
+            AttributeValue::S(keys::event_sk_penalty(discipline_id, penalty_id)),
+        )
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb get_item: {e}")))?;
@@ -119,32 +126,55 @@ pub async fn get(
 
 pub async fn delete(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
     penalty_id: Uuid,
 ) -> AppResult<()> {
     client
         .inner
         .delete_item()
         .table_name(&client.table_name)
-        .key("PK", AttributeValue::S(keys::competition_pk(competition_id)))
-        .key("SK", AttributeValue::S(keys::competition_sk_penalty(penalty_id)))
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
+        .key(
+            "SK",
+            AttributeValue::S(keys::event_sk_penalty(discipline_id, penalty_id)),
+        )
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb delete_item: {e}")))?;
     Ok(())
 }
 
-pub async fn list_for_competition(
+pub async fn list_for_event(client: &DbClient, event_id: Uuid) -> AppResult<Vec<Penalty>> {
+    let res = client
+        .inner
+        .query()
+        .table_name(&client.table_name)
+        .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
+        .expression_attribute_values(":pk", AttributeValue::S(keys::event_pk(event_id)))
+        .expression_attribute_values(":prefix", AttributeValue::S("PENALTY#".to_string()))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
+
+    parse_items(res.items.unwrap_or_default())
+}
+
+pub async fn list_for_discipline(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
+    discipline_id: Uuid,
 ) -> AppResult<Vec<Penalty>> {
     let res = client
         .inner
         .query()
         .table_name(&client.table_name)
         .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
-        .expression_attribute_values(":pk", AttributeValue::S(keys::competition_pk(competition_id)))
-        .expression_attribute_values(":prefix", AttributeValue::S("PENALTY#".to_string()))
+        .expression_attribute_values(":pk", AttributeValue::S(keys::event_pk(event_id)))
+        .expression_attribute_values(
+            ":prefix",
+            AttributeValue::S(keys::event_sk_penalty_prefix_for_discipline(discipline_id)),
+        )
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
@@ -154,7 +184,7 @@ pub async fn list_for_competition(
 
 pub async fn list_by_status(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
     status: PenaltyStatus,
 ) -> AppResult<Vec<Penalty>> {
     let res = client
@@ -165,7 +195,7 @@ pub async fn list_by_status(
         .key_condition_expression("GSI1PK = :pk AND begins_with(GSI1SK, :prefix)")
         .expression_attribute_values(
             ":pk",
-            AttributeValue::S(keys::penalty_status_gsi1pk(competition_id)),
+            AttributeValue::S(keys::penalty_status_gsi1pk(event_id)),
         )
         .expression_attribute_values(
             ":prefix",
