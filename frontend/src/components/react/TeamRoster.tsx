@@ -163,6 +163,12 @@ function TeamBlock({
   const [draft, setDraft] = useState({ first_name: '', last_name: '', birth_date: '' });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Incremented after every successful runner POST. NewRunnerRow's
+  // useEffect watches this and moves focus back to Vorname *after*
+  // React has committed the cleared draft — `setTimeout(0)` inside
+  // the await chain wasn't enough; the focus call landed before the
+  // re-render and the year input held onto the cursor.
+  const [saveCount, setSaveCount] = useState(0);
   const firstNameRef = useRef<HTMLInputElement | null>(null);
 
   const nextPosition = (runners[runners.length - 1]?.position ?? 0) + 1;
@@ -200,7 +206,9 @@ function TeamBlock({
     setDraft({ first_name: '', last_name: '', birth_date: '' });
     setErr(null);
     setAdding(true);
-    // Defer focus until after the row has mounted.
+    // Defer focus until after the row has mounted. The component is
+    // not in the tree yet on this tick, so a microtask isn't enough —
+    // setTimeout is needed.
     setTimeout(() => firstNameRef.current?.focus(), 0);
   };
 
@@ -234,11 +242,12 @@ function TeamBlock({
         birth_date: d.birth_date,
         position: nextPosition,
       });
-      // Keep the row open for chained entry; reset the draft and put
-      // the cursor back on Vorname.
+      // Keep the row open for chained entry; reset the draft and bump
+      // the save counter so NewRunnerRow's useEffect refocuses Vorname
+      // after the re-render commits.
       setDraft({ first_name: '', last_name: '', birth_date: '' });
       onChange();
-      setTimeout(() => firstNameRef.current?.focus(), 0);
+      setSaveCount((c) => c + 1);
       return true;
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Läufer konnte nicht angelegt werden');
@@ -305,6 +314,7 @@ function TeamBlock({
               saving={saving}
               nextPosition={nextPosition}
               firstNameRef={firstNameRef}
+              saveCount={saveCount}
             />
           ) : (
             <AddRunnerButtonRow onClick={startAdding} nextPosition={nextPosition} />
@@ -413,6 +423,7 @@ function NewRunnerRow({
   saving,
   nextPosition,
   firstNameRef,
+  saveCount,
 }: {
   draft: { first_name: string; last_name: string; birth_date: string };
   setDraft: React.Dispatch<
@@ -425,9 +436,21 @@ function NewRunnerRow({
   saving: boolean;
   nextPosition: number;
   firstNameRef: React.MutableRefObject<HTMLInputElement | null>;
+  /** Bumped by parent after every successful save — drives the
+   *  focus-back-to-Vorname useEffect on the *next* committed render. */
+  saveCount: number;
 }) {
   const cellCls =
     'w-full bg-[color:var(--c-ink-700)] px-3 py-2 font-mono text-[12px] text-ink-50 outline-none focus:bg-[color:var(--c-ink-600)] focus:ring-1 focus:ring-signal/50 disabled:opacity-50 placeholder:text-ink-300';
+
+  // After every successful save the parent clears the draft and bumps
+  // `saveCount`. This effect runs *after* React has committed that
+  // cleared state, so focus reliably lands on Vorname instead of
+  // racing the re-render.
+  useEffect(() => {
+    if (saveCount > 0) firstNameRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveCount]);
 
   const onEsc = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -687,6 +710,14 @@ function DateInput({
     const c = raw.replace(/\D/g, '').slice(0, 4);
     setYear(c);
     emit(day, month, c);
+    // After 4 valid digits actively hand focus off so the caller can
+    // place it wherever it wants (usually Vorname of a chained entry).
+    // Without this blur the year input still owned the cursor and the
+    // parent's focus() call against firstNameRef was racing React's
+    // re-render.
+    if (c.length === 4 && buildIsoDate(day, month, c)) {
+      yearRef.current?.blur();
+    }
   };
 
   const onWrapperBlur = (e: React.FocusEvent) => {
