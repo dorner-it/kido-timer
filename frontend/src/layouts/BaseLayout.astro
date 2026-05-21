@@ -3,17 +3,15 @@ import '../styles/global.css';
 
 interface Props {
   title: string;
-  /** Defaults to "light"; pass "dark" for the decider focus mode. */
-  theme?: 'light' | 'dark';
   /** Hides the global TopBar. Used by the public decider page. */
   bare?: boolean;
 }
 
-const { title, theme = 'light', bare = false } = Astro.props;
+const { title, bare = false } = Astro.props;
 ---
 
 <!doctype html>
-<html lang="de" data-theme={theme}>
+<html lang="de">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
