@@ -1,0 +1,13 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import TopBar from '../../components/react/TopBar.tsx';
+import EventDetail from '../../components/react/EventDetail.tsx';
+
+const { id } = Astro.params;
+if (!id) return Astro.redirect('/events');
+---
+
+<BaseLayout title="Veranstaltung – KI-DO Timer" auth="required">
+  <TopBar client:load />
+  <EventDetail id={id} client:load />
+</BaseLayout>

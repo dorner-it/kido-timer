@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
-import { ApiError, apiClient, type AuthenticatedUser } from '../../lib/api';
+import { apiClient, type AuthenticatedUser } from '../../lib/api';
 import { Brandmark } from './Brandmark';
 
 interface Props {
@@ -18,10 +18,10 @@ export default function TopBar({ context }: Props) {
     apiClient.auth
       .me()
       .then((res) => setUser(res.user))
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) {
-          window.location.href = "/login";
-        }
+      .catch(() => {
+        // 401 is already handled globally by the api client (redirects to
+        // /login with return_to). Other errors are swallowed because the
+        // header isn't critical to the page's usability.
       });
   }, []);
 
@@ -35,7 +35,7 @@ export default function TopBar({ context }: Props) {
   return (
     <header className="flex items-center justify-between gap-6 border-b border-[color:var(--hairline-color)] px-7 py-4">
       <div className="flex items-center gap-4">
-        <a href="/competitions" aria-label="Zur Übersicht" className="flex items-center gap-4">
+        <a href="/events" aria-label="Zur Übersicht" className="flex items-center gap-4">
           <Brandmark />
           <div className="hidden md:flex flex-col leading-tight">
             <span className="font-display text-[15px] font-medium tracking-wide text-ink-50">

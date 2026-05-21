@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
+use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -11,7 +12,7 @@ use crate::auth::AuthenticatedUser;
 use crate::db::teams;
 use crate::error::{AppError, AppResult};
 use crate::models::Team;
-use crate::routes::competitions::require_owned;
+use crate::routes::events::require_owned;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
@@ -24,24 +25,27 @@ pub fn router() -> axum::Router<AppState> {
 #[derive(Deserialize)]
 pub struct TeamInput {
     pub name: String,
-    pub start_number: u32,
+    pub position: u32,
 }
 
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(competition_id): Path<Uuid>,
+    Path(event_id): Path<Uuid>,
     Json(input): Json<TeamInput>,
 ) -> AppResult<(StatusCode, Json<Team>)> {
-    require_owned(&state, &auth, competition_id).await?;
+    require_owned(&state, &auth, event_id).await?;
     if input.name.trim().is_empty() {
         return Err(AppError::Validation("team name must not be empty".into()));
     }
+    let now = Utc::now();
     let team = Team {
         id: Uuid::new_v4(),
-        competition_id,
+        event_id,
         name: input.name.trim().to_string(),
-        start_number: input.start_number,
+        position: input.position,
+        created_at: now,
+        updated_at: now,
     };
     teams::put(&state.db, &team).await?;
     Ok((StatusCode::CREATED, Json(team)))
@@ -50,28 +54,30 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((competition_id, team_id)): Path<(Uuid, Uuid)>,
+    Path((event_id, team_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<TeamInput>,
 ) -> AppResult<Json<Team>> {
-    require_owned(&state, &auth, competition_id).await?;
+    require_owned(&state, &auth, event_id).await?;
     if input.name.trim().is_empty() {
         return Err(AppError::Validation("team name must not be empty".into()));
     }
-    let existing = teams::list_for_competition(&state.db, competition_id)
+    let existing = teams::list_for_event(&state.db, event_id)
         .await?
         .into_iter()
         .find(|t| t.id == team_id)
         .ok_or_else(|| AppError::NotFound(format!("team {team_id}")))?;
 
-    if existing.start_number != input.start_number {
+    if existing.position != input.position {
         teams::delete(&state.db, &existing).await?;
     }
 
     let team = Team {
         id: team_id,
-        competition_id,
+        event_id,
         name: input.name.trim().to_string(),
-        start_number: input.start_number,
+        position: input.position,
+        created_at: existing.created_at,
+        updated_at: Utc::now(),
     };
     teams::put(&state.db, &team).await?;
     Ok(Json(team))
@@ -80,10 +86,10 @@ pub async fn update(
 pub async fn remove(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((competition_id, team_id)): Path<(Uuid, Uuid)>,
+    Path((event_id, team_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<StatusCode> {
-    require_owned(&state, &auth, competition_id).await?;
-    let existing = teams::list_for_competition(&state.db, competition_id)
+    require_owned(&state, &auth, event_id).await?;
+    let existing = teams::list_for_event(&state.db, event_id)
         .await?
         .into_iter()
         .find(|t| t.id == team_id)
@@ -95,9 +101,9 @@ pub async fn remove(
 pub async fn list_runners(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((competition_id, team_id)): Path<(Uuid, Uuid)>,
+    Path((event_id, team_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<Vec<crate::models::Runner>>> {
-    require_owned(&state, &auth, competition_id).await?;
-    let runners = crate::db::runners::list_for_team(&state.db, competition_id, team_id).await?;
-    Ok(Json(runners))
+    require_owned(&state, &auth, event_id).await?;
+    let rs = crate::db::runners::list_for_team(&state.db, event_id, team_id).await?;
+    Ok(Json(rs))
 }

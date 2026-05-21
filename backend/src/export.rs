@@ -1,99 +1,109 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-//! Tamper-evident competition file format used to round-trip data between
-//! the web app and the standalone desktop app.
+//! Tamper-evident **discipline-scoped** competition file format used to
+//! round-trip data between the web app and the standalone desktop app.
 //!
-//! Wire format (`.kido` file, JSON):
+//! The desktop pairs to one discipline at a time and operates on the
+//! corresponding `.kido` file. The file carries its parent event's
+//! metadata inline so the desktop can show breadcrumbs without making
+//! an extra fetch.
+//!
+//! Wire format (`.kido` file, JSON envelope):
 //!
 //! ```text
 //! {
-//!   "v": 1,
+//!   "v": 2,
 //!   "alg": "HS256",
 //!   "owner_sub": "<cognito-sub>",
 //!   "issued_at": "2026-...",
-//!   "payload": "<base64-of-utf8-json-of-CompetitionPayload>",
+//!   "payload": "<base64-of-utf8-json-of-DisciplinePayload>",
 //!   "sig": "<base64url-no-pad-of-hmac-sha256-of-payload-bytes>"
 //! }
 //! ```
 //!
-//! Signature is HMAC-SHA256(payload_bytes) with the **owner's per-user
-//! HMAC key**. Files are tenant-scoped: the import endpoint verifies the
-//! signature using the *uploading user's* key, so a file from one tenant
-//! cannot be imported into another.
+//! Schema bumped to **v2** when the data model introduced the
+//! `Event → Discipline` hierarchy (2026-05). v1 files cannot be imported.
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD},
+};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use uuid::Uuid;
 
-use crate::db::{competitions, penalties, runners, runs, teams};
+use crate::db::{disciplines, events, penalties, runners, runs, team_entries, teams};
 use crate::error::{AppError, AppResult};
-use crate::models::{Competition, Penalty, PenaltyStatus, Run, Runner, Team};
+use crate::models::{Discipline, Event, Penalty, PenaltyStatus, Run, Runner, Team, TeamEntry};
 use crate::state::AppState;
 
-pub const SCHEMA_VERSION: u32 = 1;
-pub const ENVELOPE_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+pub const ENVELOPE_VERSION: u32 = 2;
 pub const ALG: &str = "HS256";
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Event projection without `decider_tokens` (web-only secrets that
+/// must never leave the server in an exported file).
 #[derive(Serialize, Deserialize)]
-pub struct CompetitionPayload {
-    pub schema_version: u32,
-    pub exported_at: DateTime<Utc>,
-    pub owner_sub: String,
-    pub competition: ExportedCompetition,
-    pub teams: Vec<Team>,
-    pub runners: Vec<Runner>,
-    pub runs: Vec<Run>,
-    pub approved_penalties: Vec<Penalty>,
-}
-
-/// Competition projection without `decider_tokens` (web-only secrets that
-/// should never leave the server in an exported file).
-#[derive(Serialize, Deserialize)]
-pub struct ExportedCompetition {
+pub struct ExportedEvent {
     pub id: Uuid,
     pub owner_sub: String,
     pub name: String,
     pub date: chrono::NaiveDate,
     pub location: Option<String>,
-    pub mode: crate::models::TimerMode,
-    pub sync_mode: crate::models::SyncMode,
-    /// Whether the organizer has marked this competition active. Older
-    /// `.kido` files (written before this field existed) deserialise to
-    /// `false`; harmless because importers don't trust this anyway.
     #[serde(default)]
     pub is_active: bool,
-    /// The run id the organizer currently has on the lane. The desktop
-    /// app reads this in live mode to know where to push timing
-    /// updates. `None` when no run is currently active. Older `.kido`
-    /// files default to `None`.
+    #[serde(default)]
+    pub current_discipline_id: Option<Uuid>,
     #[serde(default)]
     pub current_run_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-impl ExportedCompetition {
-    fn from_competition(c: &Competition) -> Self {
+impl ExportedEvent {
+    pub fn from_event(e: &Event) -> Self {
         Self {
-            id: c.id,
-            owner_sub: c.owner_sub.clone(),
-            name: c.name.clone(),
-            date: c.date,
-            location: c.location.clone(),
-            mode: c.mode,
-            sync_mode: c.sync_mode,
-            is_active: c.is_active,
-            current_run_id: c.current_run_id,
-            created_at: c.created_at,
-            updated_at: c.updated_at,
+            id: e.id,
+            owner_sub: e.owner_sub.clone(),
+            name: e.name.clone(),
+            date: e.date,
+            location: e.location.clone(),
+            is_active: e.is_active,
+            current_discipline_id: e.current_discipline_id,
+            current_run_id: e.current_run_id,
+            created_at: e.created_at,
+            updated_at: e.updated_at,
         }
     }
 }
+
+// ===== Discipline payload (single-discipline snapshot for desktop) =====
+
+#[derive(Serialize, Deserialize)]
+pub struct DisciplinePayload {
+    pub schema_version: u32,
+    pub exported_at: DateTime<Utc>,
+    pub owner_sub: String,
+    pub event: ExportedEvent,
+    pub discipline: Discipline,
+    /// Event-wide teams (for name lookups when the discipline only
+    /// references a subset via `team_entries`).
+    pub teams: Vec<Team>,
+    /// Event-wide runners (relay/individual modes reference these).
+    pub runners: Vec<Runner>,
+    /// Pre-filtered to this discipline only.
+    pub team_entries: Vec<TeamEntry>,
+    /// Pre-filtered to this discipline only.
+    pub runs: Vec<Run>,
+    /// Pre-filtered to this discipline only, status = Approved.
+    pub approved_penalties: Vec<Penalty>,
+}
+
+// ===== Envelope =====
 
 #[derive(Serialize, Deserialize)]
 pub struct Envelope {
@@ -105,42 +115,54 @@ pub struct Envelope {
     pub sig: String,
 }
 
-/// Gather the full competition snapshot from DDB.
-pub async fn build_payload(
+// ===== Builders =====
+
+pub async fn build_discipline_payload(
     state: &AppState,
     owner_sub: &str,
-    competition_id: Uuid,
-) -> AppResult<CompetitionPayload> {
-    let comp = competitions::get(&state.db, competition_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("competition {competition_id}")))?;
-    if comp.owner_sub != owner_sub {
-        return Err(AppError::Forbidden);
+    discipline_id: Uuid,
+) -> AppResult<DisciplinePayload> {
+    // Locate the discipline by scanning the owner's events. This is a
+    // small set (a handful of events per user) so it's fine for now;
+    // when it grows, add a discipline-id → event-id GSI lookup.
+    let evs = events::list_for_owner(&state.db, owner_sub).await?;
+    let mut found: Option<(Event, Discipline)> = None;
+    for ev in evs {
+        if let Some(disc) = disciplines::find(&state.db, ev.id, discipline_id).await? {
+            found = Some((ev, disc));
+            break;
+        }
     }
+    let (event, discipline) = found
+        .ok_or_else(|| AppError::NotFound(format!("discipline {discipline_id}")))?;
 
-    let team_list = teams::list_for_competition(&state.db, competition_id).await?;
+    let team_list = teams::list_for_event(&state.db, event.id).await?;
+    let runner_list = runners::list_for_event(&state.db, event.id).await?;
+    let entry_list =
+        team_entries::list_for_discipline(&state.db, event.id, discipline.id).await?;
+    let run_list = runs::list_for_discipline(&state.db, event.id, discipline.id).await?;
+    let approved: Vec<Penalty> =
+        penalties::list_by_status(&state.db, event.id, PenaltyStatus::Approved)
+            .await?
+            .into_iter()
+            .filter(|p| p.discipline_id == discipline.id)
+            .collect();
 
-    let mut runner_list: Vec<Runner> = Vec::new();
-    for team in &team_list {
-        let mut team_runners = runners::list_for_team(&state.db, competition_id, team.id).await?;
-        runner_list.append(&mut team_runners);
-    }
-
-    let run_list = runs::list_for_competition(&state.db, competition_id).await?;
-    let approved = penalties::list_by_status(&state.db, competition_id, PenaltyStatus::Approved)
-        .await?;
-
-    Ok(CompetitionPayload {
+    Ok(DisciplinePayload {
         schema_version: SCHEMA_VERSION,
         exported_at: Utc::now(),
         owner_sub: owner_sub.to_string(),
-        competition: ExportedCompetition::from_competition(&comp),
+        event: ExportedEvent::from_event(&event),
+        discipline,
         teams: team_list,
         runners: runner_list,
+        team_entries: entry_list,
         runs: run_list,
         approved_penalties: approved,
     })
 }
+
+// ===== Sign / verify =====
 
 fn decode_hmac_key(b64: &str) -> AppResult<Vec<u8>> {
     URL_SAFE_NO_PAD
@@ -148,17 +170,19 @@ fn decode_hmac_key(b64: &str) -> AppResult<Vec<u8>> {
         .map_err(|e| AppError::Internal(format!("hmac key decode: {e}")))
 }
 
-/// Wrap a payload in a signed envelope.
-pub fn sign(hmac_key_b64: &str, payload: &CompetitionPayload) -> AppResult<Envelope> {
+fn hmac_sign(key_bytes: &[u8], payload_b64: &str) -> AppResult<String> {
+    let mut mac = HmacSha256::new_from_slice(key_bytes)
+        .map_err(|e| AppError::Internal(format!("hmac key: {e}")))?;
+    mac.update(payload_b64.as_bytes());
+    Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
+pub fn sign(hmac_key_b64: &str, payload: &DisciplinePayload) -> AppResult<Envelope> {
     let key_bytes = decode_hmac_key(hmac_key_b64)?;
     let payload_json = serde_json::to_vec(payload)
         .map_err(|e| AppError::Internal(format!("serialize payload: {e}")))?;
     let payload_b64 = BASE64.encode(&payload_json);
-
-    let mut mac = HmacSha256::new_from_slice(&key_bytes)
-        .map_err(|e| AppError::Internal(format!("hmac key: {e}")))?;
-    mac.update(payload_b64.as_bytes());
-    let sig = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    let sig = hmac_sign(&key_bytes, &payload_b64)?;
 
     Ok(Envelope {
         v: ENVELOPE_VERSION,
@@ -170,12 +194,10 @@ pub fn sign(hmac_key_b64: &str, payload: &CompetitionPayload) -> AppResult<Envel
     })
 }
 
-/// Verify an envelope and decode its payload. Returns `Validation` on any
-/// signature mismatch / shape problem.
-pub fn verify(hmac_key_b64: &str, env: &Envelope) -> AppResult<CompetitionPayload> {
+pub fn verify(hmac_key_b64: &str, env: &Envelope) -> AppResult<DisciplinePayload> {
     if env.v != ENVELOPE_VERSION {
         return Err(AppError::Validation(format!(
-            "Unbekannte Envelope-Version: {}",
+            "Unbekannte Envelope-Version: {} (erwartet {ENVELOPE_VERSION})",
             env.v
         )));
     }
@@ -187,26 +209,25 @@ pub fn verify(hmac_key_b64: &str, env: &Envelope) -> AppResult<CompetitionPayloa
     }
 
     let key_bytes = decode_hmac_key(hmac_key_b64)?;
-    let mut mac = HmacSha256::new_from_slice(&key_bytes)
-        .map_err(|e| AppError::Internal(format!("hmac key: {e}")))?;
-    mac.update(env.payload.as_bytes());
-    let expected = mac.finalize().into_bytes();
+    let expected = hmac_sign(&key_bytes, &env.payload)?;
+    let expected_bytes = URL_SAFE_NO_PAD
+        .decode(expected.as_bytes())
+        .map_err(|e| AppError::Internal(format!("encode our own sig: {e}")))?;
 
     let provided = URL_SAFE_NO_PAD
         .decode(env.sig.as_bytes())
         .map_err(|_| AppError::Validation("Ungültige Signatur".into()))?;
 
-    if provided.as_slice() != expected.as_slice() {
+    if provided.as_slice() != expected_bytes.as_slice() {
         return Err(AppError::Validation(
-            "Signatur stimmt nicht. Datei stammt nicht von diesem Konto oder wurde verändert."
-                .into(),
+            "Signatur stimmt nicht. Datei stammt nicht von diesem Konto oder wurde verändert.".into(),
         ));
     }
 
     let payload_bytes = BASE64
         .decode(env.payload.as_bytes())
         .map_err(|_| AppError::Validation("Payload nicht entschlüsselbar".into()))?;
-    let payload: CompetitionPayload = serde_json::from_slice(&payload_bytes)
+    let payload: DisciplinePayload = serde_json::from_slice(&payload_bytes)
         .map_err(|_| AppError::Validation("Payload nicht parsebar".into()))?;
 
     if payload.schema_version != SCHEMA_VERSION {
@@ -219,8 +240,8 @@ pub fn verify(hmac_key_b64: &str, env: &Envelope) -> AppResult<CompetitionPayloa
     Ok(payload)
 }
 
-/// Best-effort filename slug for the downloaded file. Lower-case ASCII
-/// alphanumerics + hyphens.
+// ===== Slug =====
+
 pub fn filename_slug(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut last_was_dash = false;
@@ -237,8 +258,7 @@ pub fn filename_slug(name: &str) -> String {
         out.pop();
     }
     if out.is_empty() {
-        out.push_str("wettkampf");
+        out.push_str("veranstaltung");
     }
     out
 }
-

@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
 import { ApiError, apiClient, type SignInResponse } from '../../lib/api';
 import { Brandmark } from './Brandmark';
+
+/** Reads `?return_to=` from the current URL and accepts only same-origin
+ *  paths. Falls back to `/competitions` when missing or suspicious to
+ *  defeat open-redirect attempts. */
+function safeReturnTo(): string {
+  if (typeof window === 'undefined') return '/events';
+  const raw = new URLSearchParams(window.location.search).get('return_to');
+  if (!raw) return '/events';
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/events';
+  return raw;
+}
 
 const signInSchema = z.object({
   email: z
@@ -77,10 +88,26 @@ function cleanApiMessage(err: unknown, fallback: string): string {
 export default function LoginForm() {
   const [stage, setStage] = useState<Stage>({ kind: 'sign_in' });
   const [serverError, setServerError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  // Surfaces a "Sitzung abgelaufen" banner when the user landed here via
+  // the global 401 redirect. Strip the `?expired=1` flag from the URL
+  // afterwards so a manual refresh doesn't keep showing it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('expired') === '1') {
+      setSessionExpired(true);
+      params.delete('expired');
+      const qs = params.toString();
+      const clean = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash;
+      window.history.replaceState({}, '', clean);
+    }
+  }, []);
 
   const handleAuthResponse = (res: SignInResponse) => {
     if (res.result === 'authenticated') {
-      window.location.href = '/competitions';
+      window.location.href = safeReturnTo();
       return;
     }
     setStage({ kind: 'new_password', session: res.session, email: res.email });
@@ -99,6 +126,29 @@ export default function LoginForm() {
       </div>
 
       <div className="w-full">
+        {sessionExpired && stage.kind === 'sign_in' && (
+          <div
+            className="surface mb-4 flex items-start gap-3 border-status-armed/40 bg-status-armed/5 px-4 py-3 text-[13px] text-ink-50 animate-rise"
+            role="status"
+          >
+            <span className="font-stencil text-status-armed text-[18px] leading-none">!</span>
+            <div className="flex-1">
+              <p className="font-display text-ink-50">Sitzung abgelaufen</p>
+              <p className="font-mono text-[11px] text-ink-200">
+                Bitte erneut anmelden — anschließend geht's automatisch zur
+                zuletzt geöffneten Seite zurück.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSessionExpired(false)}
+              aria-label="Hinweis schließen"
+              className="text-ink-300 hover:text-ink-100 text-[14px]"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {stage.kind === 'sign_in' && (
           <SignInStep
             onResult={handleAuthResponse}

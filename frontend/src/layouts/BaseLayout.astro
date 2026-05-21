@@ -3,21 +3,50 @@ import '../styles/global.css';
 
 interface Props {
   title: string;
-  /** Defaults to "light"; pass "dark" for the decider focus mode. */
-  theme?: 'light' | 'dark';
   /** Hides the global TopBar. Used by the public decider page. */
   bare?: boolean;
+  /**
+   * - `public`   (default): no gate, page renders normally.
+   * - `required`: redirect to `/login?return_to=…` when no session-present
+   *   cookie is found. Blocks paint via inline `<head>` script.
+   * - `guest-only`: redirect away from this page if a session is already
+   *   present (e.g. `/login` when already logged in). Honors `?return_to=`.
+   */
+  auth?: 'public' | 'required' | 'guest-only';
 }
 
-const { title, theme = 'light', bare = false } = Astro.props;
+const { title, bare = false, auth = 'public' } = Astro.props;
 ---
 
 <!doctype html>
-<html lang="de" data-theme={theme}>
+<html lang="de" data-auth={auth}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    {auth !== 'public' && (
+      <script is:inline>
+        (function () {
+          var mode = document.documentElement.getAttribute('data-auth');
+          if (!mode || mode === 'public') return;
+          var hasSession = document.cookie
+            .split(';')
+            .some(function (c) {
+              return c.trim().indexOf('kido_session_present=') === 0;
+            });
+          if (mode === 'required' && !hasSession) {
+            var here = location.pathname + location.search + location.hash;
+            location.replace('/login?return_to=' + encodeURIComponent(here));
+          } else if (mode === 'guest-only' && hasSession) {
+            var params = new URLSearchParams(location.search);
+            var to = params.get('return_to') || '/events';
+            if (!to.startsWith('/') || to.startsWith('//')) to = '/events';
+            location.replace(to);
+          }
+        })();
+      </script>
+    )}
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

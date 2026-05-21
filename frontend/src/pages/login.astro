@@ -3,21 +3,25 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import LoginForm from '../components/react/LoginForm.tsx';
 ---
 
-<BaseLayout title="Anmelden – KI-DO Timer" bare>
+<BaseLayout title="Anmelden – KI-DO Timer" bare auth="guest-only">
   <main class="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
-    <aside
-      class="relative hidden overflow-hidden bg-ink-50 lg:flex"
-      data-theme="dark"
-    >
-      <div class="absolute inset-0 scanlines opacity-30"></div>
+    <aside class="relative hidden overflow-hidden lg:flex">
+      <div
+        class="absolute inset-0"
+        style="background:
+          radial-gradient(900px 700px at 18% 12%, rgba(255, 77, 46, 0.10), transparent 60%),
+          radial-gradient(700px 600px at 100% 100%, rgba(22, 163, 74, 0.06), transparent 55%),
+          linear-gradient(180deg, #fbfaf6 0%, #f5f4ee 100%);"
+      ></div>
+      <div class="absolute inset-0 scanlines opacity-40"></div>
       <div class="relative flex flex-1 flex-col justify-between p-12">
-        <span class="label text-ink-200">KiDo · Wettkampf-Kontrollstand</span>
+        <span class="label">KiDo · Wettkampf-Kontrollstand</span>
         <span
-          class="font-stencil text-[160px] font-bold leading-[0.85] tracking-tight text-ink-50/85 mix-blend-screen"
+          class="font-stencil text-[160px] font-bold leading-[0.85] tracking-tight text-ink-50/12"
         >
           KI<br />DO
         </span>
-        <p class="font-mono text-[11px] uppercase tracking-[0.22em] text-ink-200">
+        <p class="font-mono text-[11px] uppercase tracking-[0.22em] text-ink-300">
           TRV Kocab · Löschangriff · Staffel · Hindernisbahn
         </p>
       </div>

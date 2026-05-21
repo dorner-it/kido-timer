@@ -8,9 +8,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::db::{competitions, penalties, runners, runs, teams};
+use crate::db::{disciplines, events, penalties, runners, runs, teams};
 use crate::error::{AppError, AppResult};
-use crate::models::{Competition, Penalty, PenaltyStatus, Run, Runner, SyncMode, Team};
+use crate::models::{Discipline, Event, Penalty, PenaltyStatus, Run, Runner, SyncMode, Team};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
@@ -23,22 +23,23 @@ pub fn router() -> axum::Router<AppState> {
         )
 }
 
-/// Authorize a decider request and return the user's active competition.
+/// Authorize a decider request and return the user's active event +
+/// (if any) the discipline that's currently on the lane.
 async fn authorize(
     state: &AppState,
     owner_sub: &str,
     slot: u8,
     token: &str,
-) -> AppResult<Competition> {
+) -> AppResult<(Event, Option<Discipline>)> {
     if !(1..=4).contains(&slot) {
         return Err(AppError::Validation("slot must be 1..=4".into()));
     }
 
-    let comps = competitions::list_for_owner(&state.db, owner_sub).await?;
-    let active = comps
+    let evs = events::list_for_owner(&state.db, owner_sub).await?;
+    let active = evs
         .into_iter()
-        .find(|c| c.is_active)
-        .ok_or_else(|| AppError::NotFound("no active competition".into()))?;
+        .find(|e| e.is_active)
+        .ok_or_else(|| AppError::NotFound("no active event".into()))?;
 
     let expected = active
         .decider_tokens
@@ -49,7 +50,12 @@ async fn authorize(
         return Err(AppError::Unauthorized);
     }
 
-    Ok(active)
+    let current_disc = match active.current_discipline_id {
+        Some(did) => disciplines::find(&state.db, active.id, did).await?,
+        None => None,
+    };
+
+    Ok((active, current_disc))
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -67,17 +73,28 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[derive(Serialize)]
 pub struct DeciderState {
-    pub competition: PublicCompetition,
+    pub event: PublicEvent,
+    /// The discipline currently on the lane. `None` when no discipline
+    /// is selected yet ("Warte auf Wettkampf").
+    pub discipline: Option<PublicDiscipline>,
     pub slot: u8,
     pub current_run: Option<DeciderRunView>,
-    /// True iff the competition is currently in `offline` sync mode. The
-    /// pad UI renders a stub when this is set; penalty submissions are
-    /// also rejected server-side in that state.
+    /// True iff the active discipline is in `offline` sync mode (or no
+    /// discipline is selected). The pad UI renders a stub when this is
+    /// set; penalty submissions are also rejected server-side then.
     pub disabled: bool,
 }
 
 #[derive(Serialize)]
-pub struct PublicCompetition {
+pub struct PublicEvent {
+    pub id: Uuid,
+    pub name: String,
+    pub date: chrono::NaiveDate,
+    pub location: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PublicDiscipline {
     pub id: Uuid,
     pub name: String,
     pub mode: crate::models::TimerMode,
@@ -94,33 +111,53 @@ pub async fn state_endpoint(
     State(state): State<AppState>,
     Path((owner_sub, slot, token)): Path<(String, u8, String)>,
 ) -> AppResult<Json<DeciderState>> {
-    let active = authorize(&state, &owner_sub, slot, &token).await?;
+    let (event, current_disc) = authorize(&state, &owner_sub, slot, &token).await?;
 
-    if active.sync_mode == SyncMode::Offline {
+    let public_event = PublicEvent {
+        id: event.id,
+        name: event.name.clone(),
+        date: event.date,
+        location: event.location.clone(),
+    };
+
+    let Some(disc) = current_disc else {
         return Ok(Json(DeciderState {
-            competition: PublicCompetition {
-                id: active.id,
-                name: active.name,
-                mode: active.mode,
-            },
+            event: public_event,
+            discipline: None,
+            slot,
+            current_run: None,
+            disabled: true,
+        }));
+    };
+
+    let public_disc = PublicDiscipline {
+        id: disc.id,
+        name: disc.name.clone(),
+        mode: disc.mode,
+    };
+
+    if disc.sync_mode == SyncMode::Offline {
+        return Ok(Json(DeciderState {
+            event: public_event,
+            discipline: Some(public_disc),
             slot,
             current_run: None,
             disabled: true,
         }));
     }
 
-    let current_run = if let Some(run_id) = active.current_run_id {
-        let runs_for_comp = runs::list_for_competition(&state.db, active.id).await?;
-        let run = runs_for_comp.into_iter().find(|r| r.id == run_id);
+    let current_run = if let Some(run_id) = event.current_run_id {
+        let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
+        let run = runs_for_disc.into_iter().find(|r| r.id == run_id);
         match run {
             Some(run) => {
-                let team = teams::list_for_competition(&state.db, active.id)
+                let team = teams::list_for_event(&state.db, event.id)
                     .await?
                     .into_iter()
                     .find(|t| t.id == run.team_id)
                     .ok_or_else(|| AppError::Internal("run references unknown team".into()))?;
                 let runner = match run.runner_id {
-                    Some(rid) => runners::list_for_team(&state.db, active.id, run.team_id)
+                    Some(rid) => runners::list_for_team(&state.db, event.id, run.team_id)
                         .await?
                         .into_iter()
                         .find(|r| r.id == rid),
@@ -135,11 +172,8 @@ pub async fn state_endpoint(
     };
 
     Ok(Json(DeciderState {
-        competition: PublicCompetition {
-            id: active.id,
-            name: active.name,
-            mode: active.mode,
-        },
+        event: public_event,
+        discipline: Some(public_disc),
         slot,
         current_run,
         disabled: false,
@@ -152,9 +186,6 @@ pub async fn state_endpoint(
 pub struct SubmitPenaltyInput {
     pub delta_ms: i32,
     pub reason_code: Option<String>,
-    /// Optional client-generated UUID. Used as the penalty's `id` so a
-    /// retry from a flaky tablet upserts the same row instead of creating
-    /// a duplicate. Absent → server generates one (legacy behaviour).
     pub client_id: Option<Uuid>,
 }
 
@@ -163,20 +194,23 @@ pub async fn submit_penalty(
     Path((owner_sub, slot, token)): Path<(String, u8, String)>,
     Json(input): Json<SubmitPenaltyInput>,
 ) -> AppResult<(StatusCode, Json<Penalty>)> {
-    let active = authorize(&state, &owner_sub, slot, &token).await?;
+    let (event, current_disc) = authorize(&state, &owner_sub, slot, &token).await?;
+    let disc = current_disc.ok_or_else(|| {
+        AppError::Conflict("no discipline is currently selected on the lane".into())
+    })?;
 
-    if active.sync_mode == SyncMode::Offline {
+    if disc.sync_mode == SyncMode::Offline {
         return Err(AppError::Conflict(
             "Wettkampf läuft offline; Strafrichter sind deaktiviert".into(),
         ));
     }
 
-    let run_id = active
+    let run_id = event
         .current_run_id
         .ok_or_else(|| AppError::Conflict("no run is currently active".into()))?;
 
-    let runs_for_comp = runs::list_for_competition(&state.db, active.id).await?;
-    let run = runs_for_comp
+    let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
+    let run = runs_for_disc
         .into_iter()
         .find(|r| r.id == run_id)
         .ok_or_else(|| AppError::Internal("current_run_id references unknown run".into()))?;
@@ -184,13 +218,7 @@ pub async fn submit_penalty(
     let penalty_id = input.client_id.unwrap_or_else(Uuid::new_v4);
     let now = Utc::now();
 
-    // If a penalty with this client_id already exists, the request is a
-    // retry. Two cases to handle:
-    //  - Still pending: upsert with fresh inputs, preserve created_at.
-    //  - Already reviewed (approved/rejected): return the existing row
-    //    untouched. Otherwise a stale tablet retry could undo the
-    //    organizer's review.
-    if let Some(existing) = penalties::get(&state.db, active.id, penalty_id).await? {
+    if let Some(existing) = penalties::get(&state.db, event.id, disc.id, penalty_id).await? {
         if existing.decider_slot != slot {
             return Err(AppError::Conflict(
                 "client_id belongs to a different slot".into(),
@@ -201,7 +229,8 @@ pub async fn submit_penalty(
         }
         let penalty = Penalty {
             id: existing.id,
-            competition_id: active.id,
+            event_id: event.id,
+            discipline_id: disc.id,
             run_id: run.id,
             team_id: run.team_id,
             runner_id: run.runner_id,
@@ -222,7 +251,8 @@ pub async fn submit_penalty(
 
     let penalty = Penalty {
         id: penalty_id,
-        competition_id: active.id,
+        event_id: event.id,
+        discipline_id: disc.id,
         run_id: run.id,
         team_id: run.team_id,
         runner_id: run.runner_id,
@@ -248,15 +278,17 @@ pub async fn withdraw_penalty(
     State(state): State<AppState>,
     Path((owner_sub, slot, token, penalty_id)): Path<(String, u8, String, Uuid)>,
 ) -> AppResult<StatusCode> {
-    let active = authorize(&state, &owner_sub, slot, &token).await?;
+    let (event, current_disc) = authorize(&state, &owner_sub, slot, &token).await?;
+    let disc = current_disc
+        .ok_or_else(|| AppError::Conflict("no discipline is currently selected".into()))?;
 
-    if active.sync_mode == SyncMode::Offline {
+    if disc.sync_mode == SyncMode::Offline {
         return Err(AppError::Conflict(
             "Wettkampf läuft offline; Strafrichter sind deaktiviert".into(),
         ));
     }
 
-    let penalty = penalties::get(&state.db, active.id, penalty_id)
+    let penalty = penalties::get(&state.db, event.id, disc.id, penalty_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("penalty {penalty_id}")))?;
 
@@ -267,6 +299,6 @@ pub async fn withdraw_penalty(
         return Err(AppError::Conflict("only pending penalties can be withdrawn".into()));
     }
 
-    penalties::delete(&state.db, active.id, penalty_id).await?;
+    penalties::delete(&state.db, event.id, disc.id, penalty_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

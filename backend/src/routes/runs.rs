@@ -9,26 +9,32 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
-use crate::db::runs;
+use crate::db::{disciplines, runs};
 use crate::error::{AppError, AppResult};
 use crate::models::{Run, RunStatus};
-use crate::routes::competitions::require_owned;
+use crate::routes::events::require_owned;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
-        .route("/{id}/runs", get(list).post(create))
-        .route("/{id}/runs/{run_number}/{run_id}", put(update))
+        .route(
+            "/{id}/disciplines/{discipline_id}/runs",
+            get(list).post(create),
+        )
+        .route(
+            "/{id}/disciplines/{discipline_id}/runs/{run_number}/{run_id}",
+            put(update),
+        )
 }
 
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(competition_id): Path<Uuid>,
+    Path((event_id, discipline_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<Vec<Run>>> {
-    require_owned(&state, &auth, competition_id).await?;
-    let runs = runs::list_for_competition(&state.db, competition_id).await?;
-    Ok(Json(runs))
+    require_owned(&state, &auth, event_id).await?;
+    let rs = runs::list_for_discipline(&state.db, event_id, discipline_id).await?;
+    Ok(Json(rs))
 }
 
 #[derive(Deserialize)]
@@ -42,10 +48,13 @@ pub struct CreateRunInput {
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(competition_id): Path<Uuid>,
+    Path((event_id, discipline_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<CreateRunInput>,
 ) -> AppResult<(StatusCode, Json<Run>)> {
-    require_owned(&state, &auth, competition_id).await?;
+    require_owned(&state, &auth, event_id).await?;
+    let _disc = disciplines::find(&state.db, event_id, discipline_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("discipline {discipline_id}")))?;
     if let Some(lane) = input.lane {
         if !(1..=2).contains(&lane) {
             return Err(AppError::Validation("lane must be 1 or 2".into()));
@@ -54,7 +63,8 @@ pub async fn create(
     let now = Utc::now();
     let run = Run {
         id: Uuid::new_v4(),
-        competition_id,
+        event_id,
+        discipline_id,
         team_id: input.team_id,
         runner_id: input.runner_id,
         run_number: input.run_number,
@@ -82,12 +92,12 @@ pub struct UpdateRunInput {
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((competition_id, run_number, run_id)): Path<(Uuid, u32, Uuid)>,
+    Path((event_id, discipline_id, run_number, run_id)): Path<(Uuid, Uuid, u32, Uuid)>,
     Json(input): Json<UpdateRunInput>,
 ) -> AppResult<Json<Run>> {
-    require_owned(&state, &auth, competition_id).await?;
+    require_owned(&state, &auth, event_id).await?;
 
-    let mut run = runs::get(&state.db, competition_id, run_number, run_id)
+    let mut run = runs::get(&state.db, event_id, discipline_id, run_number, run_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("run {run_id}")))?;
 

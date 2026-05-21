@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use aws_sdk_dynamodb::types::AttributeValue;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -21,26 +21,30 @@ struct RunnerItem {
 
     id: Uuid,
     team_id: Uuid,
-    competition_id: Uuid,
+    event_id: Uuid,
     first_name: String,
     last_name: String,
     birth_date: NaiveDate,
     position: u32,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 impl RunnerItem {
     fn from_runner(r: &Runner) -> Self {
         Self {
-            pk: keys::competition_pk(r.competition_id),
-            sk: keys::competition_sk_runner(r.team_id, r.position),
+            pk: keys::event_pk(r.event_id),
+            sk: keys::event_sk_runner(r.team_id, r.position),
 
             id: r.id,
             team_id: r.team_id,
-            competition_id: r.competition_id,
+            event_id: r.event_id,
             first_name: r.first_name.clone(),
             last_name: r.last_name.clone(),
             birth_date: r.birth_date,
             position: r.position,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
         }
     }
 
@@ -48,11 +52,13 @@ impl RunnerItem {
         Runner {
             id: self.id,
             team_id: self.team_id,
-            competition_id: self.competition_id,
+            event_id: self.event_id,
             first_name: self.first_name,
             last_name: self.last_name,
             birth_date: self.birth_date,
             position: self.position,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         }
     }
 }
@@ -78,13 +84,10 @@ pub async fn delete(client: &DbClient, runner: &Runner) -> AppResult<()> {
         .inner
         .delete_item()
         .table_name(&client.table_name)
-        .key(
-            "PK",
-            AttributeValue::S(keys::competition_pk(runner.competition_id)),
-        )
+        .key("PK", AttributeValue::S(keys::event_pk(runner.event_id)))
         .key(
             "SK",
-            AttributeValue::S(keys::competition_sk_runner(runner.team_id, runner.position)),
+            AttributeValue::S(keys::event_sk_runner(runner.team_id, runner.position)),
         )
         .send()
         .await
@@ -94,7 +97,7 @@ pub async fn delete(client: &DbClient, runner: &Runner) -> AppResult<()> {
 
 pub async fn list_for_team(
     client: &DbClient,
-    competition_id: Uuid,
+    event_id: Uuid,
     team_id: Uuid,
 ) -> AppResult<Vec<Runner>> {
     let res = client
@@ -102,21 +105,36 @@ pub async fn list_for_team(
         .query()
         .table_name(&client.table_name)
         .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
-        .expression_attribute_values(":pk", AttributeValue::S(keys::competition_pk(competition_id)))
-        .expression_attribute_values(
-            ":prefix",
-            AttributeValue::S(format!("RUNNER#{team_id}#")),
-        )
+        .expression_attribute_values(":pk", AttributeValue::S(keys::event_pk(event_id)))
+        .expression_attribute_values(":prefix", AttributeValue::S(format!("RUNNER#{team_id}#")))
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
 
-    let items = res.items.unwrap_or_default();
-    let mut runners = Vec::with_capacity(items.len());
+    parse_items(res.items.unwrap_or_default())
+}
+
+pub async fn list_for_event(client: &DbClient, event_id: Uuid) -> AppResult<Vec<Runner>> {
+    let res = client
+        .inner
+        .query()
+        .table_name(&client.table_name)
+        .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
+        .expression_attribute_values(":pk", AttributeValue::S(keys::event_pk(event_id)))
+        .expression_attribute_values(":prefix", AttributeValue::S("RUNNER#".to_string()))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb query: {e}")))?;
+
+    parse_items(res.items.unwrap_or_default())
+}
+
+fn parse_items(items: Vec<HashMap<String, AttributeValue>>) -> AppResult<Vec<Runner>> {
+    let mut out = Vec::with_capacity(items.len());
     for item in items {
         let parsed: RunnerItem = serde_dynamo::from_item(item)
             .map_err(|e| AppError::Internal(format!("serde_dynamo from_item: {e}")))?;
-        runners.push(parsed.into_runner());
+        out.push(parsed.into_runner());
     }
-    Ok(runners)
+    Ok(out)
 }

@@ -53,49 +53,6 @@
     --selection-fg: rgb(20, 15, 10);
   }
 
-  [data-theme='dark'] {
-    color-scheme: dark;
-
-    --c-ink-900: 8 8 11;
-    --c-ink-800: 12 12 17;
-    --c-ink-700: 19 19 26;
-    --c-ink-600: 27 27 37;
-    --c-ink-500: 38 38 53;
-    --c-ink-400: 58 58 78;
-    --c-ink-300: 91 91 115;
-    --c-ink-200: 150 150 171;
-    --c-ink-100: 205 205 224;
-    --c-ink-50: 241 241 247;
-
-    --c-status-inactive: 58 58 78;
-    --c-status-armed: 251 191 36;
-    --c-status-running: 163 230 53;
-    --c-status-captured: 251 146 60;
-    --c-status-confirmed: 34 197 94;
-    --c-status-unknown: 239 68 68;
-
-    --c-signal-glow: 255 122 91;
-
-    --bg-page:
-      radial-gradient(1200px 800px at 12% -10%, rgba(255, 77, 46, 0.07), transparent 60%),
-      radial-gradient(900px 700px at 110% 110%, rgba(34, 197, 94, 0.05), transparent 55%),
-      linear-gradient(180deg, #08080b 0%, #0c0c11 60%, #08080b 100%);
-
-    --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 60px -20px rgba(0, 0, 0, 0.6);
-
-    --grain-blend: overlay;
-    --grain-opacity: 0.06;
-
-    --watermark-color: rgba(255, 255, 255, 0.025);
-    --scanline-color: rgba(255, 255, 255, 0.025);
-
-    --hairline-color: rgba(255, 255, 255, 0.05);
-    --soft-fill: rgba(255, 255, 255, 0.04);
-
-    --selection-bg: rgba(255, 77, 46, 0.4);
-    --selection-fg: white;
-  }
-
   html,
   body {
     min-height: 100%;

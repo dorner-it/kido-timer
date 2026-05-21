@@ -6,6 +6,11 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 pub const COOKIE_NAME: &str = "kido_session";
+/// Non-httpOnly companion cookie. Carries no secret — only its presence
+/// matters. The static frontend reads it via a blocking inline script in
+/// `<head>` to gate auth-required pages without a roundtrip, preventing
+/// the flash-of-unauth content that an in-React 401 redirect produces.
+pub const PRESENCE_COOKIE_NAME: &str = "kido_session_present";
 const SESSION_TTL_DAYS: i64 = 30;
 
 pub fn random_token(bytes: usize) -> String {

@@ -26,19 +26,19 @@ impl RunStatus {
 
 /// One row per timing result. Mirrors the desktop app's `RunEntry` (an
 /// `originalTimeMs` from the timer plus a `correctionMs` operator-applied
-/// adjustment).
+/// adjustment). Runs belong to a discipline; `event_id` is denormalized
+/// so a single `Query PK = EVENT#<id>` retrieves all runs of the day.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     pub id: Uuid,
-    pub competition_id: Uuid,
+    pub event_id: Uuid,
+    pub discipline_id: Uuid,
     pub team_id: Uuid,
     pub runner_id: Option<Uuid>,
     pub run_number: u32,
     pub lane: Option<u8>,
     pub status: RunStatus,
     pub original_time_ms: Option<u32>,
-    /// Sum of approved penalties' `delta_ms`. Maintained denormalized on the
-    /// run row for fast display.
     pub correction_ms: i32,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,

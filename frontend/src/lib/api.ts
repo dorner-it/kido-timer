@@ -30,18 +30,29 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, code, message);
 }
 
+interface RequestOptions extends RequestInit {
+  /** Set `true` to bypass the global 401 → /login redirect. Use for probes
+   *  (e.g. auth.me on a public page) where 401 is a valid value. */
+  allowUnauthorized?: boolean;
+}
+
 async function request<T>(
   path: string,
-  init: RequestInit = {},
+  init: RequestOptions = {},
 ): Promise<T> {
+  const { allowUnauthorized, ...fetchInit } = init;
   const res = await fetch(`${API_BASE_URL}${path}`, {
     credentials: 'include',
-    ...init,
+    ...fetchInit,
     headers: {
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(init.headers ?? {}),
+      ...(fetchInit.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(fetchInit.headers ?? {}),
     },
   });
+  if (res.status === 401 && !allowUnauthorized) {
+    redirectToLogin();
+    throw await parseError(res);
+  }
   if (!res.ok) {
     throw await parseError(res);
   }
@@ -51,7 +62,19 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
-// ===== domain types — mirror the backend =====
+let redirecting = false;
+function redirectToLogin() {
+  if (typeof window === 'undefined' || redirecting) return;
+  if (window.location.pathname === '/login') return;
+  redirecting = true;
+  const here = window.location.pathname + window.location.search + window.location.hash;
+  const params = new URLSearchParams();
+  params.set('return_to', here);
+  params.set('expired', '1');
+  window.location.replace(`/login?${params}`);
+}
+
+// ===== domain types — mirror the backend (schema v2) =====
 
 export type TimerMode = 'single_lane' | 'two_lane_parallel' | 'relay' | 'individual';
 export type SyncMode = 'live' | 'offline';
@@ -66,41 +89,68 @@ export interface AuthenticatedUser {
   updated_at: string;
 }
 
-export interface Competition {
+/** Tagesveranstaltung — parent of disciplines. */
+export interface Event {
   id: string;
   owner_sub: string;
   name: string;
   date: string;
   location: string | null;
-  mode: TimerMode;
-  sync_mode: SyncMode;
   is_active: boolean;
+  current_discipline_id: string | null;
   current_run_id: string | null;
   decider_tokens: [string, string, string, string];
   created_at: string;
   updated_at: string;
 }
 
+/** Wettkampf — one discipline within an event. */
+export interface Discipline {
+  id: string;
+  event_id: string;
+  name: string;
+  mode: TimerMode;
+  sync_mode: SyncMode;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Team {
   id: string;
-  competition_id: string;
+  event_id: string;
   name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamEntry {
+  team_id: string;
+  discipline_id: string;
+  event_id: string;
   start_number: number;
+  lane: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Runner {
   id: string;
   team_id: string;
-  competition_id: string;
+  event_id: string;
   first_name: string;
   last_name: string;
   birth_date: string;
   position: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Run {
   id: string;
-  competition_id: string;
+  event_id: string;
+  discipline_id: string;
   team_id: string;
   runner_id: string | null;
   run_number: number;
@@ -116,7 +166,8 @@ export interface Run {
 
 export interface Penalty {
   id: string;
-  competition_id: string;
+  event_id: string;
+  discipline_id: string;
   run_id: string;
   team_id: string;
   runner_id: string | null;
@@ -129,10 +180,14 @@ export interface Penalty {
   reviewed_by: string | null;
 }
 
-export interface CompetitionDetail {
-  competition: Competition;
+/** Full event detail returned by `GET /api/events/:id`. One round-trip
+ *  gathers every row beneath the event partition. */
+export interface EventDetail {
+  event: Event;
+  disciplines: Discipline[];
   teams: Team[];
   runners: Runner[];
+  team_entries: TeamEntry[];
   runs: Run[];
 }
 
@@ -149,7 +204,8 @@ export interface ApiKeyCreatedResponse {
 }
 
 export interface DeciderState {
-  competition: { id: string; name: string; mode: TimerMode };
+  event: { id: string; name: string; date: string; location: string | null };
+  discipline: { id: string; name: string; mode: TimerMode } | null;
   slot: number;
   current_run: {
     run: Run;
@@ -166,19 +222,21 @@ export interface ImportResultsResponse {
   penalties_skipped: number;
 }
 
-// ===== client =====
-
 export type SignInResponse =
   | { result: 'authenticated'; user: AuthenticatedUser }
   | { result: 'new_password_required'; session: string; email: string };
 
+// Auth endpoints opt out of the global 401-redirect: a 401 here means
+// "bad credentials" or "no session yet", which is a legitimate response
+// the LoginForm wants to display, not a trigger to redirect.
 export const apiClient = {
   auth: {
-    me: () => request<{ user: AuthenticatedUser }>('/api/auth/me'),
+    me: () => request<{ user: AuthenticatedUser }>('/api/auth/me', { allowUnauthorized: true }),
     signIn: (input: { email: string; password: string }) =>
       request<SignInResponse>('/api/auth/sign-in', {
         method: 'POST',
         body: JSON.stringify(input),
+        allowUnauthorized: true,
       }),
     completeNewPassword: (input: {
       email: string;
@@ -188,11 +246,13 @@ export const apiClient = {
       request<SignInResponse>('/api/auth/complete-new-password', {
         method: 'POST',
         body: JSON.stringify(input),
+        allowUnauthorized: true,
       }),
     forgotPassword: (input: { email: string }) =>
       request<void>('/api/auth/forgot-password', {
         method: 'POST',
         body: JSON.stringify(input),
+        allowUnauthorized: true,
       }),
     confirmForgotPassword: (input: {
       email: string;
@@ -202,88 +262,99 @@ export const apiClient = {
       request<void>('/api/auth/confirm-forgot-password', {
         method: 'POST',
         body: JSON.stringify(input),
+        allowUnauthorized: true,
       }),
   },
-  competitions: {
-    list: () => request<Competition[]>('/api/competitions'),
-    create: (input: {
-      name: string;
-      date: string;
-      mode: TimerMode;
-      location?: string | null;
-    }) =>
-      request<Competition>('/api/competitions', {
+  events: {
+    list: () => request<Event[]>('/api/events'),
+    create: (input: { name: string; date: string; location?: string | null }) =>
+      request<Event>('/api/events', {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    detail: (id: string) => request<CompetitionDetail>(`/api/competitions/${id}`),
+    detail: (id: string) => request<EventDetail>(`/api/events/${id}`),
     update: (
       id: string,
-      input: Partial<{ name: string; date: string; mode: TimerMode; location: string | null }>,
+      input: Partial<{ name: string; date: string; location: string | null }>,
     ) =>
-      request<Competition>(`/api/competitions/${id}`, {
+      request<Event>(`/api/events/${id}`, {
         method: 'PUT',
         body: JSON.stringify(input),
       }),
-    remove: (id: string) =>
-      request<void>(`/api/competitions/${id}`, { method: 'DELETE' }),
+    remove: (id: string) => request<void>(`/api/events/${id}`, { method: 'DELETE' }),
     activate: (id: string) =>
-      request<Competition>(`/api/competitions/${id}/activate`, { method: 'POST' }),
-    setCurrentRun: (id: string, run_id: string | null) =>
-      request<Competition>(`/api/competitions/${id}/current-run`, {
+      request<Event>(`/api/events/${id}/activate`, { method: 'POST' }),
+    setCurrent: (id: string, body: { discipline_id: string | null; run_id: string | null }) =>
+      request<Event>(`/api/events/${id}/current`, {
         method: 'POST',
-        body: JSON.stringify({ run_id }),
-      }),
-    setSyncMode: (id: string, sync_mode: SyncMode) =>
-      request<Competition>(`/api/competitions/${id}/sync-mode`, {
-        method: 'POST',
-        body: JSON.stringify({ sync_mode }),
+        body: JSON.stringify(body),
       }),
     rotateDeciderTokens: (id: string) =>
-      request<Competition>(`/api/competitions/${id}/decider-tokens/rotate`, {
+      request<Event>(`/api/events/${id}/decider-tokens/rotate`, { method: 'POST' }),
+  },
+  disciplines: {
+    create: (event_id: string, input: { name: string; mode: TimerMode; position: number }) =>
+      request<Discipline>(`/api/events/${event_id}/disciplines`, {
         method: 'POST',
+        body: JSON.stringify(input),
       }),
-    exportFile: async (id: string): Promise<{ blob: Blob; filename: string }> => {
-      const res = await fetch(`${API_BASE_URL}/api/competitions/${id}/export-file`, {
-        credentials: 'include',
-      });
+    update: (
+      event_id: string,
+      discipline_id: string,
+      input: { name: string; mode: TimerMode; position: number },
+    ) =>
+      request<Discipline>(`/api/events/${event_id}/disciplines/${discipline_id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    remove: (event_id: string, discipline_id: string) =>
+      request<void>(`/api/events/${event_id}/disciplines/${discipline_id}`, {
+        method: 'DELETE',
+      }),
+    setSyncMode: (event_id: string, discipline_id: string, sync_mode: SyncMode) =>
+      request<Discipline>(
+        `/api/events/${event_id}/disciplines/${discipline_id}/sync-mode`,
+        { method: 'POST', body: JSON.stringify({ sync_mode }) },
+      ),
+    exportFile: async (
+      event_id: string,
+      discipline_id: string,
+    ): Promise<{ blob: Blob; filename: string }> => {
+      const res = await fetch(
+        `${API_BASE_URL}/api/events/${event_id}/disciplines/${discipline_id}/export-file`,
+        { credentials: 'include' },
+      );
       if (!res.ok) {
         throw await parseError(res);
       }
       const disposition = res.headers.get('Content-Disposition') ?? '';
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const filename = match?.[1] ?? `kido-${id}.kido`;
+      const filename = match?.[1] ?? `kido-${discipline_id}.kido`;
       return { blob: await res.blob(), filename };
     },
-    importResults: (id: string, envelope: unknown) =>
-      request<ImportResultsResponse>(`/api/competitions/${id}/import-results`, {
-        method: 'POST',
-        body: JSON.stringify(envelope),
-      }),
+    importResults: (event_id: string, discipline_id: string, envelope: unknown) =>
+      request<ImportResultsResponse>(
+        `/api/events/${event_id}/disciplines/${discipline_id}/import-results`,
+        { method: 'POST', body: JSON.stringify(envelope) },
+      ),
   },
   teams: {
-    create: (competition_id: string, input: { name: string; start_number: number }) =>
-      request<Team>(`/api/competitions/${competition_id}/teams`, {
+    create: (event_id: string, input: { name: string; position: number }) =>
+      request<Team>(`/api/events/${event_id}/teams`, {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    update: (
-      competition_id: string,
-      team_id: string,
-      input: { name: string; start_number: number },
-    ) =>
-      request<Team>(`/api/competitions/${competition_id}/teams/${team_id}`, {
+    update: (event_id: string, team_id: string, input: { name: string; position: number }) =>
+      request<Team>(`/api/events/${event_id}/teams/${team_id}`, {
         method: 'PUT',
         body: JSON.stringify(input),
       }),
-    remove: (competition_id: string, team_id: string) =>
-      request<void>(`/api/competitions/${competition_id}/teams/${team_id}`, {
-        method: 'DELETE',
-      }),
+    remove: (event_id: string, team_id: string) =>
+      request<void>(`/api/events/${event_id}/teams/${team_id}`, { method: 'DELETE' }),
   },
   runners: {
     create: (
-      competition_id: string,
+      event_id: string,
       team_id: string,
       input: {
         first_name: string;
@@ -292,12 +363,12 @@ export const apiClient = {
         position: number;
       },
     ) =>
-      request<Runner>(
-        `/api/competitions/${competition_id}/teams/${team_id}/runners`,
-        { method: 'POST', body: JSON.stringify(input) },
-      ),
+      request<Runner>(`/api/events/${event_id}/teams/${team_id}/runners`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
     update: (
-      competition_id: string,
+      event_id: string,
       team_id: string,
       runner_id: string,
       input: {
@@ -308,20 +379,37 @@ export const apiClient = {
       },
     ) =>
       request<Runner>(
-        `/api/competitions/${competition_id}/teams/${team_id}/runners/${runner_id}`,
+        `/api/events/${event_id}/teams/${team_id}/runners/${runner_id}`,
         { method: 'PUT', body: JSON.stringify(input) },
       ),
-    remove: (competition_id: string, team_id: string, runner_id: string) =>
+    remove: (event_id: string, team_id: string, runner_id: string) =>
       request<void>(
-        `/api/competitions/${competition_id}/teams/${team_id}/runners/${runner_id}`,
+        `/api/events/${event_id}/teams/${team_id}/runners/${runner_id}`,
+        { method: 'DELETE' },
+      ),
+  },
+  teamEntries: {
+    upsert: (
+      event_id: string,
+      discipline_id: string,
+      input: { team_id: string; start_number: number; lane: number | null },
+    ) =>
+      request<TeamEntry>(
+        `/api/events/${event_id}/disciplines/${discipline_id}/entries`,
+        { method: 'POST', body: JSON.stringify(input) },
+      ),
+    remove: (event_id: string, discipline_id: string, team_id: string) =>
+      request<void>(
+        `/api/events/${event_id}/disciplines/${discipline_id}/entries/${team_id}`,
         { method: 'DELETE' },
       ),
   },
   runs: {
-    list: (competition_id: string) =>
-      request<Run[]>(`/api/competitions/${competition_id}/runs`),
+    list: (event_id: string, discipline_id: string) =>
+      request<Run[]>(`/api/events/${event_id}/disciplines/${discipline_id}/runs`),
     create: (
-      competition_id: string,
+      event_id: string,
+      discipline_id: string,
       input: {
         team_id: string;
         runner_id: string | null;
@@ -329,12 +417,13 @@ export const apiClient = {
         lane: number | null;
       },
     ) =>
-      request<Run>(`/api/competitions/${competition_id}/runs`, {
+      request<Run>(`/api/events/${event_id}/disciplines/${discipline_id}/runs`, {
         method: 'POST',
         body: JSON.stringify(input),
       }),
     update: (
-      competition_id: string,
+      event_id: string,
+      discipline_id: string,
       run_number: number,
       run_id: string,
       input: Partial<{
@@ -345,23 +434,26 @@ export const apiClient = {
       }>,
     ) =>
       request<Run>(
-        `/api/competitions/${competition_id}/runs/${run_number}/${run_id}`,
+        `/api/events/${event_id}/disciplines/${discipline_id}/runs/${run_number}/${run_id}`,
         { method: 'PUT', body: JSON.stringify(input) },
       ),
   },
   penalties: {
-    list: (competition_id: string, status?: PenaltyStatus) => {
-      const q = status ? `?status=${status}` : '';
-      return request<Penalty[]>(`/api/competitions/${competition_id}/penalties${q}`);
+    list: (event_id: string, opts?: { status?: PenaltyStatus; discipline_id?: string }) => {
+      const params = new URLSearchParams();
+      if (opts?.status) params.set('status', opts.status);
+      if (opts?.discipline_id) params.set('discipline_id', opts.discipline_id);
+      const q = params.toString() ? `?${params}` : '';
+      return request<Penalty[]>(`/api/events/${event_id}/penalties${q}`);
     },
-    approve: (competition_id: string, penalty_id: string) =>
+    approve: (event_id: string, penalty_id: string) =>
       request<Penalty>(
-        `/api/competitions/${competition_id}/penalties/${penalty_id}/approve`,
+        `/api/events/${event_id}/penalties/${penalty_id}/approve`,
         { method: 'POST' },
       ),
-    reject: (competition_id: string, penalty_id: string) =>
+    reject: (event_id: string, penalty_id: string) =>
       request<Penalty>(
-        `/api/competitions/${competition_id}/penalties/${penalty_id}/reject`,
+        `/api/events/${event_id}/penalties/${penalty_id}/reject`,
         { method: 'POST' },
       ),
   },
@@ -385,8 +477,6 @@ export const apiClient = {
       input: {
         delta_ms: number;
         reason_code?: string | null;
-        /** Stable client-generated UUID; backend uses it as the row id so
-         *  retries from a flaky tablet are idempotent. */
         client_id?: string;
       },
     ) =>
