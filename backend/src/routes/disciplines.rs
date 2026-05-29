@@ -38,7 +38,7 @@ pub fn router() -> axum::Router<AppState> {
         )
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct DisciplineInput {
     pub name: String,
     pub mode: TimerMode,
@@ -259,4 +259,75 @@ pub async fn import_results(
         runs_skipped,
         penalties_skipped,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Contract tests for the `POST /api/events/:id/disciplines` body.
+    //!
+    //! Full end-to-end routing tests would need a DynamoDB stub (not yet
+    //! present in this repo — see `tests/integration.rs` which only
+    //! exercises `health_router`). Until that exists, we cover the v3
+    //! TimerMode contract at the deserialization boundary, which is
+    //! exactly where the handler returns `400 validation`: serde rejects
+    //! unknown enum variants before our handler runs, and axum's
+    //! `Json<T>` extractor turns that into a 400.
+    use super::*;
+
+    #[test]
+    fn accepts_gruppenstaffette() {
+        let body = serde_json::json!({
+            "name": "Gruppenstaffette Männer",
+            "mode": "gruppenstaffette",
+            "position": 1
+        });
+        let parsed: DisciplineInput =
+            serde_json::from_value(body).expect("v3 body must deserialize");
+        assert_eq!(parsed.mode, TimerMode::Gruppenstaffette);
+        assert_eq!(parsed.mode.lane_count(), 2);
+    }
+
+    #[test]
+    fn accepts_loeschangriff() {
+        let body = serde_json::json!({
+            "name": "Löschangriff Männer",
+            "mode": "loeschangriff",
+            "position": 2
+        });
+        let parsed: DisciplineInput = serde_json::from_value(body).unwrap();
+        assert_eq!(parsed.mode, TimerMode::Loeschangriff);
+        assert_eq!(parsed.mode.lane_count(), 4);
+    }
+
+    #[test]
+    fn rejects_v1_two_lane_parallel() {
+        let body = serde_json::json!({
+            "name": "Old Mode",
+            "mode": "two_lane_parallel",
+            "position": 1
+        });
+        let err = serde_json::from_value::<DisciplineInput>(body).unwrap_err();
+        // Serde reports unknown variants — the route's `Json<T>` extractor
+        // surfaces this as `400 validation` via axum's default error path.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("two_lane_parallel") || msg.contains("variant"),
+            "expected unknown-variant error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_all_legacy_modes() {
+        for legacy in ["single_lane", "two_lane_parallel", "relay", "individual"] {
+            let body = serde_json::json!({
+                "name": "Old",
+                "mode": legacy,
+                "position": 1
+            });
+            assert!(
+                serde_json::from_value::<DisciplineInput>(body).is_err(),
+                "legacy mode {legacy} must be rejected at the JSON boundary"
+            );
+        }
+    }
 }

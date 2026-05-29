@@ -5,6 +5,7 @@ pub mod client;
 pub mod disciplines;
 pub mod events;
 pub mod keys;
+pub mod migrations;
 pub mod penalties;
 pub mod runners;
 pub mod runs;

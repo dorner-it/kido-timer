@@ -44,7 +44,7 @@ async fn v1_gone() -> impl IntoResponse {
         Json(json!({
             "error": {
                 "code": "schema_v1_gone",
-                "message": "Diese Route wurde durch /api/events/... (schema_version 2) ersetzt. Bitte Client aktualisieren."
+                "message": "Diese Route wurde durch /api/events/... (schema_version 3) ersetzt. Bitte Client aktualisieren."
             }
         })),
     )

@@ -31,14 +31,21 @@ A `.kido` file is a UTF-8 JSON document containing a tamper-evident envelope:
 
 ```jsonc
 {
-  "v": 1,                                  // envelope version
-  "alg": "HS256",                          // HMAC-SHA256, fixed for v1
+  "v": 3,                                  // envelope version (matches schema_version)
+  "alg": "HS256",                          // HMAC-SHA256, fixed
   "owner_sub": "<cognito-sub>",            // tenant identifier
   "issued_at": "2026-05-06T10:13:00Z",     // RFC 3339 UTC
   "payload": "<base64-of-utf8-json>",      // standard base64 (with padding)
   "sig": "<base64url-no-pad>"              // HMAC-SHA256 over payload bytes
 }
 ```
+
+Schema history:
+- **v1**: original flat `Competition` model (gone — `/api/competitions/...` returns 410).
+- **v2**: introduced the `Event → Discipline` hierarchy.
+- **v3**: replaced the generic `TimerMode` with discipline-specific
+  `gruppenstaffette` (2 lanes) and `loeschangriff` (4 lanes). Old values
+  are rejected with `400 validation`.
 
 ### 2.1 Signing rule
 
@@ -53,13 +60,13 @@ sig = base64url_no_pad(
 
 The MAC covers the **base64 string** of the payload, not the raw JSON, so verification doesn't depend on canonical JSON formatting.
 
-### 2.2 Inner payload (`schema_version: 1`)
+### 2.2 Inner payload (`schema_version: 3`)
 
 After base64-decoding `envelope.payload` you get this JSON:
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "exported_at": "2026-05-06T10:13:00Z",
   "owner_sub": "<cognito-sub>",                 // must equal envelope.owner_sub
   "competition": {
@@ -68,7 +75,7 @@ After base64-decoding `envelope.payload` you get this JSON:
     "name": "Bezirksausscheid 2026",
     "date": "2026-06-12",                       // YYYY-MM-DD
     "location": "Sportplatz Musterhausen",      // nullable
-    "mode": "two_lane_parallel",                // see TimerMode below
+    "mode": "loeschangriff",                    // see TimerMode below
     "sync_mode": "live",                        // see SyncMode below
     "is_active": true,                          // organizer toggle
     "current_run_id": "<uuid|null>",            // run currently on the lane
@@ -110,13 +117,24 @@ After base64-decoding `envelope.payload` you get this JSON:
 **Enum values:**
 
 ```
-TimerMode    = "single_lane" | "two_lane_parallel" | "relay" | "individual"
+TimerMode    = "gruppenstaffette" | "loeschangriff"
 SyncMode     = "live" | "offline"
 RunStatus    = "pending" | "active" | "completed" | "cancelled"
 PenaltyStatus = "pending" | "approved" | "rejected"
 ```
 
-Unknown enum values must cause the consumer to reject the file with a clear error (don't silently fall through).
+`TimerMode` reflects the actual discipline run on TRV Kocab hardware
+rather than a generic lane layout. Lane counts are intrinsic to the
+variant:
+
+| Variant            | Lanes | Discipline                                 |
+|--------------------|-------|--------------------------------------------|
+| `gruppenstaffette` | 2     | Gruppenstaffette (group-vs-group relay)    |
+| `loeschangriff`    | 4     | Löschangriff (classic fire-attack)         |
+
+Unknown enum values — including the v1/v2 strings `single_lane`,
+`two_lane_parallel`, `relay`, `individual` — must cause the consumer to
+reject the file with a clear error (don't silently fall through).
 
 ### 2.3 Direction conventions
 
@@ -203,7 +221,7 @@ Lists competitions the API key's owner has.
     "id": "<uuid>",
     "name": "...",
     "date": "2026-06-12",
-    "mode": "two_lane_parallel",
+    "mode": "loeschangriff",
     "sync_mode": "live",
     "is_active": true,
     "current_run_id": "<uuid|null>"
@@ -342,7 +360,7 @@ The web does **not** wipe data on mode switch — switching is metadata-only.
 - **Cache the HMAC key in the OS keychain**, not in plaintext on disk. It's effectively as sensitive as the API key (in fact, both together let you forge offline files for this user).
 - **Don't trust your local clock for `correction_ms` math.** The web is the authority for penalties (they're either decided online by deciders or stamped `approved` on import).
 - **Idempotency:** the live ingest endpoint is keyed on `run_id` and is idempotent. If a POST times out, retry — the server will simply overwrite with the same values.
-- **Schema version check first.** When loading any payload (file or `GET /competitions/:id`), bail if `schema_version != 1`. New fields will land additively under `schema_version: 1` for non-breaking changes; a v2 will mean a coordinated release.
+- **Schema version check first.** When loading any payload (file or `GET /api/export/disciplines/:id`), bail if `schema_version != 3`. New fields land additively under `schema_version: 3` for non-breaking changes; a v4 will mean a coordinated release.
 
 ---
 

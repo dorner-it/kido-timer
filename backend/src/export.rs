@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! {
-//!   "v": 2,
+//!   "v": 3,
 //!   "alg": "HS256",
 //!   "owner_sub": "<cognito-sub>",
 //!   "issued_at": "2026-...",
@@ -21,8 +21,16 @@
 //! }
 //! ```
 //!
-//! Schema bumped to **v2** when the data model introduced the
-//! `Event → Discipline` hierarchy (2026-05). v1 files cannot be imported.
+//! Schema history:
+//! - **v1**: original `Competition` flat model.
+//! - **v2**: introduced the `Event → Discipline` hierarchy (2026-05).
+//! - **v3**: replaced the generic `TimerMode` (`single_lane`,
+//!   `two_lane_parallel`, `relay`, `individual`) with the discipline-
+//!   specific variants `gruppenstaffette` (2 lanes) and `loeschangriff`
+//!   (4 lanes). Existing rows must be backfilled by
+//!   `bin/migrate_timer_mode` before this build can serve them.
+//!
+//! Older envelopes/payloads cannot be imported — clients must update.
 
 use base64::{
     Engine,
@@ -39,8 +47,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Discipline, Event, Penalty, PenaltyStatus, Run, Runner, Team, TeamEntry};
 use crate::state::AppState;
 
-pub const SCHEMA_VERSION: u32 = 2;
-pub const ENVELOPE_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
+pub const ENVELOPE_VERSION: u32 = 3;
 pub const ALG: &str = "HS256";
 
 type HmacSha256 = Hmac<Sha256>;

@@ -43,8 +43,8 @@ const COMMON_SEVERE: PenaltyPreset = {
 };
 
 export const PRESETS_BY_MODE: Record<TimerMode, PenaltyPreset[]> = {
-  // Löschangriff: classic two-lane fire-attack discipline
-  two_lane_parallel: [
+  // Löschangriff: 4 Bahnen, klassische Feuerwehr-Wettkampfordnung.
+  loeschangriff: [
     { label: '+ 5 s', delta_ms: 5_000, reason_code: 'kleiner_fehler', reason_label: 'Kleiner Fehler' },
     { label: '+ 10 s', delta_ms: 10_000, reason_code: 'knoten_bund', reason_label: 'Knoten / Bund' },
     { label: '+ 20 s', delta_ms: 20_000, reason_code: 'schlauchfuehrung', reason_label: 'Schlauchführung' },
@@ -52,30 +52,12 @@ export const PRESETS_BY_MODE: Record<TimerMode, PenaltyPreset[]> = {
     COMMON_SEVERE,
     COMMON_DSQ,
   ],
-  // Staffellauf
-  relay: [
+  // Gruppenstaffette: 2 Bahnen, Staffellauf-Format.
+  gruppenstaffette: [
     { label: '+ 5 s', delta_ms: 5_000, reason_code: 'kleiner_fehler', reason_label: 'Kleiner Fehler' },
     { label: '+ 10 s', delta_ms: 10_000, reason_code: 'uebergabe', reason_label: 'Übergabefehler' },
     { label: '+ 20 s', delta_ms: 20_000, reason_code: 'wechselzone', reason_label: 'Wechselzone' },
-    { label: '+ 30 s', delta_ms: 30_000, reason_code: 'stab_verloren', reason_label: 'Stab verloren' },
-    COMMON_SEVERE,
-    COMMON_DSQ,
-  ],
-  // Hindernisbahn / Einzelbahn
-  single_lane: [
-    { label: '+ 5 s', delta_ms: 5_000, reason_code: 'kleiner_fehler', reason_label: 'Kleiner Fehler' },
-    { label: '+ 10 s', delta_ms: 10_000, reason_code: 'hilfestellung', reason_label: 'Hilfestellung' },
-    { label: '+ 20 s', delta_ms: 20_000, reason_code: 'hindernis_ausgelassen', reason_label: 'Hindernis ausgelassen' },
-    { label: '+ 30 s', delta_ms: 30_000, reason_code: 'mehrfache_hilfe', reason_label: 'Mehrfache Hilfe' },
-    COMMON_SEVERE,
-    COMMON_DSQ,
-  ],
-  // Einzellauf
-  individual: [
-    { label: '+ 5 s', delta_ms: 5_000, reason_code: 'kleiner_fehler', reason_label: 'Kleiner Fehler' },
-    { label: '+ 10 s', delta_ms: 10_000, reason_code: 'hilfestellung', reason_label: 'Hilfestellung' },
-    { label: '+ 20 s', delta_ms: 20_000, reason_code: 'disziplin', reason_label: 'Disziplinverstoß' },
-    { label: '+ 30 s', delta_ms: 30_000, reason_code: 'mehrfach', reason_label: 'Mehrfacher Fehler' },
+    { label: '+ 30 s', delta_ms: 30_000, reason_code: 'hindernis', reason_label: 'Hindernisfehler' },
     COMMON_SEVERE,
     COMMON_DSQ,
   ],
