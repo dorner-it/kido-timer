@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::auth::AuthenticatedUser;
 use crate::db::runners;
 use crate::error::{AppError, AppResult};
-use crate::models::Runner;
+use crate::models::{Gender, Runner};
 use crate::routes::events::require_owned;
 use crate::state::AppState;
 
@@ -30,6 +30,11 @@ pub struct RunnerInput {
     pub last_name: String,
     pub birth_date: NaiveDate,
     pub position: u32,
+    /// Required on **new** writes (validated in `validate`); the field
+    /// itself stays `Option<_>` because pre-migration runner rows in
+    /// DDB may still surface here on update via the existing-row merge.
+    #[serde(default)]
+    pub gender: Option<Gender>,
 }
 
 pub async fn create(
@@ -39,7 +44,7 @@ pub async fn create(
     Json(input): Json<RunnerInput>,
 ) -> AppResult<(StatusCode, Json<Runner>)> {
     require_owned(&state, &auth, event_id).await?;
-    validate(&input)?;
+    validate(&input, /* require_gender = */ true)?;
     let now = Utc::now();
     let runner = Runner {
         id: Uuid::new_v4(),
@@ -49,6 +54,7 @@ pub async fn create(
         last_name: input.last_name.trim().to_string(),
         birth_date: input.birth_date,
         position: input.position,
+        gender: input.gender,
         created_at: now,
         updated_at: now,
     };
@@ -63,7 +69,10 @@ pub async fn update(
     Json(input): Json<RunnerInput>,
 ) -> AppResult<Json<Runner>> {
     require_owned(&state, &auth, event_id).await?;
-    validate(&input)?;
+    // Updating a *pre-migration* runner is allowed without gender (the
+    // server will keep the previously-stored value, which may also be
+    // None). Once any value is present, callers should resend it.
+    validate(&input, /* require_gender = */ false)?;
 
     let existing = runners::list_for_team(&state.db, event_id, team_id)
         .await?
@@ -83,6 +92,10 @@ pub async fn update(
         last_name: input.last_name.trim().to_string(),
         birth_date: input.birth_date,
         position: input.position,
+        // Prefer the incoming gender; fall back to the previously-stored
+        // one so PUT bodies that omit the field don't accidentally wipe
+        // it for pre-migration runners.
+        gender: input.gender.or(existing.gender),
         created_at: existing.created_at,
         updated_at: Utc::now(),
     };
@@ -105,12 +118,18 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn validate(input: &RunnerInput) -> AppResult<()> {
+fn validate(input: &RunnerInput, require_gender: bool) -> AppResult<()> {
     if input.first_name.trim().is_empty() {
         return Err(AppError::Validation("first_name must not be empty".into()));
     }
     if input.last_name.trim().is_empty() {
         return Err(AppError::Validation("last_name must not be empty".into()));
+    }
+    // Gender is mandatory on new writes — the WG derivation can't
+    // dispatch all-male vs all-female rosters otherwise. We keep the
+    // model field optional on read to tolerate pre-migration items.
+    if require_gender && input.gender.is_none() {
+        return Err(AppError::Validation("gender must be set".into()));
     }
     Ok(())
 }

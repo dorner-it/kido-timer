@@ -80,6 +80,10 @@ export type TimerMode = 'single_lane' | 'two_lane_parallel' | 'relay' | 'individ
 export type SyncMode = 'live' | 'offline';
 export type RunStatus = 'pending' | 'active' | 'completed' | 'cancelled';
 export type PenaltyStatus = 'pending' | 'approved' | 'rejected';
+/** Geschlecht — mandatory on new runners; tolerated as `null` on pre-migration items. */
+export type Gender = 'male' | 'female';
+/** Wertungsgruppe — derived from a TeamEntry's roster against the event date. */
+export type Wertungsgruppe = 'wg1' | 'wg2' | 'wg3' | 'wg4' | 'wg5';
 
 export interface AuthenticatedUser {
   sub: string;
@@ -131,6 +135,10 @@ export interface TeamEntry {
   event_id: string;
   start_number: number;
   lane: number | null;
+  /** Stamped at create/update time from the roster + event date. `null`
+   *  for pre-migration rows or when the roster was inconsistent at the
+   *  time of the last write. */
+  wg: Wertungsgruppe | null;
   created_at: string;
   updated_at: string;
 }
@@ -143,6 +151,8 @@ export interface Runner {
   last_name: string;
   birth_date: string;
   position: number;
+  /** Required on new runners; `null` on pre-migration items. */
+  gender: Gender | null;
   created_at: string;
   updated_at: string;
 }
@@ -361,6 +371,7 @@ export const apiClient = {
         last_name: string;
         birth_date: string;
         position: number;
+        gender: Gender;
       },
     ) =>
       request<Runner>(`/api/events/${event_id}/teams/${team_id}/runners`, {
@@ -376,6 +387,7 @@ export const apiClient = {
         last_name: string;
         birth_date: string;
         position: number;
+        gender: Gender | null;
       },
     ) =>
       request<Runner>(
@@ -510,4 +522,25 @@ export const PENALTY_STATUS_LABELS: Record<PenaltyStatus, string> = {
   pending: 'Ausstehend',
   approved: 'Genehmigt',
   rejected: 'Abgelehnt',
+};
+
+export const GENDER_LABELS: Record<Gender, string> = {
+  male: 'männlich',
+  female: 'weiblich',
+};
+
+export const WERTUNGSGRUPPE_LABELS: Record<Wertungsgruppe, string> = {
+  wg1: 'WG1',
+  wg2: 'WG2',
+  wg3: 'WG3',
+  wg4: 'WG4',
+  wg5: 'WG5',
+};
+
+export const WERTUNGSGRUPPE_DESCRIPTIONS: Record<Wertungsgruppe, string> = {
+  wg1: 'Jungen + Mädchen 8-10 (gemischt)',
+  wg2: 'Jungen bis 14 (nur männlich)',
+  wg3: 'Mädchen bis 14 (nur weiblich)',
+  wg4: 'Jungen bis 18 (nur männlich)',
+  wg5: 'Mädchen bis 18 (nur weiblich)',
 };

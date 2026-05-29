@@ -28,6 +28,13 @@ pub enum AppError {
     #[error("rate limited")]
     RateLimited,
 
+    /// Wertungsgruppe could not be derived (mixed gender outside WG1,
+    /// roster too old, missing gender, …). Surfaced as 400 with code
+    /// `wg_inconsistent` so the frontend can flag the offending entry
+    /// rather than swallow it under a generic `validation` error.
+    #[error("wg_inconsistent: {0}")]
+    WgInconsistent(String),
+
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -41,6 +48,7 @@ impl AppError {
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::WgInconsistent(_) => StatusCode::BAD_REQUEST,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -53,6 +61,7 @@ impl AppError {
             AppError::Forbidden => "forbidden",
             AppError::Conflict(_) => "conflict",
             AppError::RateLimited => "rate_limited",
+            AppError::WgInconsistent(_) => "wg_inconsistent",
             AppError::Internal(_) => "internal",
         }
     }
