@@ -3,7 +3,10 @@
 import { useMemo, useState } from 'react';
 
 import {
+  ApiError,
   TIMER_MODE_LABELS,
+  WERTUNGSGRUPPE_DESCRIPTIONS,
+  WERTUNGSGRUPPE_LABELS,
   apiClient,
   type Discipline,
   type EventDetail as EventDetailData,
@@ -131,7 +134,11 @@ function DisciplineEntriesBlock({
       await apiClient.teamEntries.upsert(event_id, discipline.id, entry);
       onChange();
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'Speichern fehlgeschlagen');
+      if (e instanceof ApiError && e.code === 'wg_inconsistent') {
+        onError(`Wertungsgruppe konnte nicht abgeleitet werden: ${e.message}`);
+      } else {
+        onError(e instanceof Error ? e.message : 'Speichern fehlgeschlagen');
+      }
     }
   };
 
@@ -197,6 +204,7 @@ function DisciplineEntriesBlock({
             <tr className="border-b border-[color:var(--hairline-color)] text-left">
               <Th className="w-20">Startnr.</Th>
               <Th>Mannschaft</Th>
+              <Th className="w-24">WG</Th>
               {wantsLanes && <Th className="w-20">Bahn</Th>}
               <Th className="w-12 text-right"> </Th>
             </tr>
@@ -342,6 +350,9 @@ function EntryRow({
         />
       </td>
       <td className="px-3 py-2 font-display text-ink-50">{team?.name ?? '?'}</td>
+      <td className="px-3 py-2">
+        <WgBadge wg={entry.wg} />
+      </td>
       {wantsLanes && (
         <td className="px-3 py-2">
           <select
@@ -419,5 +430,30 @@ function Th({
     >
       {children}
     </th>
+  );
+}
+
+/** Compact WG badge with hover tooltip. Renders a warning glyph when
+ *  the entry has no WG stamp (created before the migration, or the
+ *  roster was inconsistent at the time of the last write). */
+function WgBadge({ wg }: { wg: TeamEntry['wg'] }) {
+  if (!wg) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded bg-status-unknown/15 px-2 py-0.5 font-mono text-[11px] text-status-unknown"
+        title="Wertungsgruppe nicht gesetzt — Roster prüfen und Meldung neu speichern."
+        aria-label="Wertungsgruppe nicht gesetzt"
+      >
+        ⚠ —
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center rounded bg-signal/15 px-2 py-0.5 font-mono text-[11px] font-semibold text-signal-glow"
+      title={WERTUNGSGRUPPE_DESCRIPTIONS[wg]}
+    >
+      {WERTUNGSGRUPPE_LABELS[wg]}
+    </span>
   );
 }
