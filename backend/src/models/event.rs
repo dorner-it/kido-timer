@@ -23,10 +23,16 @@ pub struct Event {
     pub current_discipline_id: Option<Uuid>,
     /// Within `current_discipline_id`, the run currently being timed.
     pub current_run_id: Option<Uuid>,
-    /// 4 opaque tokens, one per strafrichter slot. Shared across
-    /// disciplines because a strafrichter is a physical person at the
-    /// venue, not a per-discipline role.
+    /// 4 opaque tokens, one per strafrichter slot. **Deprecated** —
+    /// kept so existing QR codes that include `/:slot/:token/` keep
+    /// working. New flows use the single `station_token` below.
     pub decider_tokens: [String; 4],
+    /// Single 32-byte URL-safe base64 token shared by every strafrichter
+    /// at this event. The decider picks their station inside the app
+    /// rather than encoding it into the URL. Generated at event
+    /// creation; backfilled on first save for legacy events.
+    #[serde(default)]
+    pub station_token: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

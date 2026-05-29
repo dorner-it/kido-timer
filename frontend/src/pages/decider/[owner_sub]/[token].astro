@@ -1,0 +1,22 @@
+---
+// Stations flow: one shared token per Tagesveranstaltung, the
+// strafrichter picks their station inside the app. The slot-based
+// route at `/decider/:owner/:slot/:token` stays mounted alongside
+// this for backwards compatibility with QR codes minted before this
+// feature shipped.
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import DeciderPad from '../../../components/react/DeciderPad.tsx';
+
+const { owner_sub, token } = Astro.params;
+if (!owner_sub || !token) {
+  return new Response('Bad request', { status: 400 });
+}
+---
+
+<BaseLayout title={`Strafrichter – KI-DO Timer`} bare>
+  <DeciderPad
+    ownerSub={owner_sub}
+    stationToken={token}
+    client:load
+  />
+</BaseLayout>

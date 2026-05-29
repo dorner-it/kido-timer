@@ -32,6 +32,8 @@ struct EventItem {
     current_discipline_id: Option<Uuid>,
     current_run_id: Option<Uuid>,
     decider_tokens: [String; 4],
+    #[serde(default)]
+    station_token: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -53,6 +55,7 @@ impl EventItem {
             current_discipline_id: e.current_discipline_id,
             current_run_id: e.current_run_id,
             decider_tokens: e.decider_tokens.clone(),
+            station_token: e.station_token.clone(),
             created_at: e.created_at,
             updated_at: e.updated_at,
         }
@@ -69,6 +72,7 @@ impl EventItem {
             current_discipline_id: self.current_discipline_id,
             current_run_id: self.current_run_id,
             decider_tokens: self.decider_tokens,
+            station_token: self.station_token,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
