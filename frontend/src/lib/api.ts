@@ -110,10 +110,34 @@ export interface Event {
   is_active: boolean;
   current_discipline_id: string | null;
   current_run_id: string | null;
+  /** Deprecated; kept on the wire for legacy QR codes. */
   decider_tokens: [string, string, string, string];
+  /** Single shared strafrichter token (URL-safe base64, 32 raw bytes).
+   *  Empty string on legacy rows; backfilled on the next save. */
+  station_token: string;
   created_at: string;
   updated_at: string;
 }
+
+/** Strafrichter station, matches backend `StationKind`. */
+export type StationKind =
+  | 'start'
+  | 'verteiler'
+  | 'strahlrohr'
+  | 'knoten'
+  | 'kuebelspritze'
+  | 'podest'
+  | 'strahlrohrlinie';
+
+export const STATION_KIND_LABELS: Record<StationKind, string> = {
+  start: 'Start',
+  verteiler: 'Verteiler',
+  strahlrohr: 'Strahlrohr',
+  knoten: 'Knoten',
+  kuebelspritze: 'Kübelspritze',
+  podest: 'Podest',
+  strahlrohrlinie: 'Strahlrohrlinie',
+};
 
 /** Wettkampf — one discipline within an event. */
 export interface Discipline {
@@ -188,6 +212,10 @@ export interface Penalty {
   run_id: string;
   team_id: string;
   runner_id: string | null;
+  /** Originating station; `null` on rows written before this feature. */
+  station: StationKind | null;
+  is_disqualification: boolean;
+  /** Deprecated identity for legacy slot-token submissions. */
   decider_slot: number;
   delta_ms: number;
   reason_code: string | null;
@@ -230,6 +258,25 @@ export interface DeciderState {
     runner: Runner | null;
   } | null;
   disabled: boolean;
+}
+
+/** Response of the station-token state endpoint. */
+export interface StationDeciderState {
+  event: { id: string; name: string; date: string; location: string | null };
+  discipline: { id: string; name: string; mode: TimerMode } | null;
+  current_run: {
+    run: Run;
+    team: Team;
+    runner: Runner | null;
+  } | null;
+  disabled: boolean;
+  allowed_stations: StationKind[];
+}
+
+export interface BulkApproveResponse {
+  approved: number;
+  rejected: number;
+  dq: number;
 }
 
 export interface ImportResultsResponse {
@@ -475,6 +522,11 @@ export const apiClient = {
         `/api/events/${event_id}/penalties/${penalty_id}/reject`,
         { method: 'POST' },
       ),
+    bulkApprove: (event_id: string, run_id: string) =>
+      request<BulkApproveResponse>(
+        `/api/events/${event_id}/runs/${run_id}/penalties/bulk-approve`,
+        { method: 'POST' },
+      ),
   },
   apiKeys: {
     list: () => request<ApiKeySummary[]>('/api/users/me/api-keys'),
@@ -508,6 +560,39 @@ export const apiClient = {
         `/api/decider/${owner_sub}/${slot}/${token}/penalties/${penalty_id}`,
         { method: 'DELETE' },
       ),
+  },
+  // New station-token flow. Same shape as the slot flow, minus the
+  // slot path segment — the station travels in the body instead.
+  deciderStation: {
+    state: (owner_sub: string, token: string) =>
+      request<StationDeciderState>(`/api/decider/${owner_sub}/${token}/state`),
+    submit: (
+      owner_sub: string,
+      token: string,
+      input: {
+        station: StationKind;
+        delta_ms?: number | null;
+        is_disqualification?: boolean;
+        reason_code?: string | null;
+        client_id?: string;
+      },
+    ) =>
+      request<Penalty>(`/api/decider/${owner_sub}/${token}/penalties`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    withdraw: (
+      owner_sub: string,
+      token: string,
+      penalty_id: string,
+      station: StationKind | null,
+    ) => {
+      const q = station ? `?station=${encodeURIComponent(station)}` : '';
+      return request<void>(
+        `/api/decider/${owner_sub}/${token}/penalties/${penalty_id}${q}`,
+        { method: 'DELETE' },
+      );
+    },
   },
 };
 

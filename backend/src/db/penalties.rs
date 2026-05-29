@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::db::client::DbClient;
 use crate::db::keys;
 use crate::error::{AppError, AppResult};
-use crate::models::{Penalty, PenaltyStatus};
+use crate::models::{Penalty, PenaltyStatus, StationKind};
 
 #[derive(Serialize, Deserialize)]
 struct PenaltyItem {
@@ -30,6 +30,10 @@ struct PenaltyItem {
     team_id: Uuid,
     runner_id: Option<Uuid>,
     decider_slot: u8,
+    #[serde(default)]
+    station: Option<StationKind>,
+    #[serde(default)]
+    is_disqualification: bool,
     delta_ms: i32,
     reason_code: Option<String>,
     status: PenaltyStatus,
@@ -53,6 +57,8 @@ impl PenaltyItem {
             team_id: p.team_id,
             runner_id: p.runner_id,
             decider_slot: p.decider_slot,
+            station: p.station,
+            is_disqualification: p.is_disqualification,
             delta_ms: p.delta_ms,
             reason_code: p.reason_code.clone(),
             status: p.status,
@@ -70,6 +76,8 @@ impl PenaltyItem {
             run_id: self.run_id,
             team_id: self.team_id,
             runner_id: self.runner_id,
+            station: self.station,
+            is_disqualification: self.is_disqualification,
             decider_slot: self.decider_slot,
             delta_ms: self.delta_ms,
             reason_code: self.reason_code,

@@ -4,10 +4,12 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   PENALTY_STATUS_LABELS,
+  STATION_KIND_LABELS,
   apiClient,
   type EventDetail as EventDetailData,
   type Penalty,
   type PenaltyStatus,
+  type StationKind,
 } from '../../lib/api';
 import { formatTimeMs } from '../../lib/format';
 
@@ -17,27 +19,41 @@ interface Props {
 }
 
 const STATUSES: PenaltyStatus[] = ['pending', 'approved', 'rejected'];
+const STATIONS: StationKind[] = [
+  'start',
+  'verteiler',
+  'strahlrohr',
+  'knoten',
+  'kuebelspritze',
+  'podest',
+  'strahlrohrlinie',
+];
 
 export default function PenaltiesPanel({ data, onChange }: Props) {
-  const { event, disciplines, teams, runners } = data;
+  const { event, disciplines, teams, runners, runs } = data;
   const [status, setStatus] = useState<PenaltyStatus | 'all'>('pending');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
+  const [stationFilter, setStationFilter] = useState<StationKind | 'all'>('all');
   const [list, setList] = useState<Penalty[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, disciplineFilter]);
+  }, [status, disciplineFilter, stationFilter]);
 
   const refresh = async () => {
     try {
       const filter: { status?: PenaltyStatus; discipline_id?: string } = {};
       if (status !== 'all') filter.status = status;
       if (disciplineFilter !== 'all') filter.discipline_id = disciplineFilter;
-      const result = await apiClient.penalties.list(event.id, filter);
+      let result = await apiClient.penalties.list(event.id, filter);
       result.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      if (stationFilter !== 'all') {
+        result = result.filter((p) => p.station === stationFilter);
+      }
       setList(result);
       setError(null);
     } catch (e) {
@@ -57,6 +73,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
     () => new Map(disciplines.map((d) => [d.id, d])),
     [disciplines],
   );
+  const runById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
 
   const approve = async (id: string) => {
     setBusyId(id);
@@ -81,6 +98,63 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
       setError(e instanceof Error ? e.message : 'Ablehnen fehlgeschlagen');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  // "Lauf abschließen" — bulk-approve every pending penalty for one
+  // run. Groups the current list by run_id (after every filter the
+  // operator already chose) and presents one button per run with
+  // pending rows.
+  const pendingByRun = useMemo(() => {
+    if (!list) return new Map<string, Penalty[]>();
+    const out = new Map<string, Penalty[]>();
+    for (const p of list) {
+      if (p.status !== 'pending') continue;
+      const arr = out.get(p.run_id) ?? [];
+      arr.push(p);
+      out.set(p.run_id, arr);
+    }
+    return out;
+  }, [list]);
+
+  const bulkApprove = async (runId: string) => {
+    const pendings = pendingByRun.get(runId) ?? [];
+    if (pendings.length === 0) return;
+    const run = runById.get(runId);
+    const team = run ? teamById.get(run.team_id) : null;
+    const lines = pendings
+      .map((p) => {
+        const ds = p.station ? STATION_KIND_LABELS[p.station] : 'ohne Station';
+        const delta =
+          p.is_disqualification
+            ? 'DQ'
+            : `${p.delta_ms >= 0 ? '+' : ''}${formatTimeMs(Math.abs(p.delta_ms))}`;
+        return `• ${ds}: ${delta}${p.reason_code ? ` (${p.reason_code})` : ''}`;
+      })
+      .join('\n');
+    const header = run
+      ? `Lauf ${run.run_number} – ${team?.name ?? '?'}`
+      : `Lauf ${runId.slice(0, 6)}`;
+    const ok = window.confirm(
+      `Lauf abschließen?\n\n${header}\n\nFolgende ${pendings.length} ausstehende Strafe(n) werden genehmigt:\n${lines}`,
+    );
+    if (!ok) return;
+    setBulkBusy(true);
+    try {
+      const res = await apiClient.penalties.bulkApprove(event.id, runId);
+      await refresh();
+      onChange();
+      setError(null);
+      // Soft feedback via the existing error slot so the operator
+      // sees what happened without a toast system.
+      // eslint-disable-next-line no-alert
+      window.alert(
+        `Genehmigt: ${res.approved}, davon ${res.dq} Disqualifikation(en).`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Lauf-Abschluss fehlgeschlagen');
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -128,8 +202,58 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
               ))}
             </select>
           </div>
+          <div className="field">
+            <label className="label" htmlFor="penalty-station">
+              Station
+            </label>
+            <select
+              id="penalty-station"
+              className="input"
+              value={stationFilter}
+              onChange={(e) =>
+                setStationFilter(e.target.value as StationKind | 'all')
+              }
+            >
+              <option value="all">Alle Stationen</option>
+              {STATIONS.map((s) => (
+                <option key={s} value={s}>
+                  {STATION_KIND_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
+
+      {pendingByRun.size > 0 && (
+        <div className="surface flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+          <p className="font-mono text-[12px] text-ink-200">
+            {pendingByRun.size === 1
+              ? '1 Lauf mit ausstehenden Strafen.'
+              : `${pendingByRun.size} Läufe mit ausstehenden Strafen.`}{' '}
+            Mit „Lauf abschließen" werden alle pendings eines Laufs auf einmal
+            genehmigt.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {Array.from(pendingByRun.entries()).map(([runId, pendings]) => {
+              const run = runById.get(runId);
+              const team = run ? teamById.get(run.team_id) : null;
+              return (
+                <button
+                  key={runId}
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={bulkBusy}
+                  onClick={() => bulkApprove(runId)}
+                >
+                  Lauf {run?.run_number ?? '?'} – {team?.name ?? '?'}{' '}
+                  abschließen ({pendings.length})
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="surface px-5 py-3 text-[13px] text-status-unknown">{error}</p>
@@ -149,6 +273,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                 <Th>Zeit</Th>
                 <Th>Wettkampf</Th>
                 <Th>Mannschaft / Läufer</Th>
+                <Th>Station</Th>
                 <Th>Slot</Th>
                 <Th className="text-right">Δ</Th>
                 <Th>Grund</Th>
@@ -180,10 +305,21 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                         </span>
                       )}
                     </Td>
-                    <Td className="font-mono">B{p.decider_slot}</Td>
+                    <Td className="font-mono text-[11px]">
+                      {p.station ? STATION_KIND_LABELS[p.station] : '—'}
+                    </Td>
+                    <Td className="font-mono">
+                      {p.decider_slot > 0 ? `B${p.decider_slot}` : '—'}
+                    </Td>
                     <Td className="text-right font-mono tnum text-signal-glow">
-                      {p.delta_ms >= 0 ? '+' : ''}
-                      {formatTimeMs(Math.abs(p.delta_ms))}
+                      {p.is_disqualification ? (
+                        <span className="text-status-unknown">DQ</span>
+                      ) : (
+                        <>
+                          {p.delta_ms >= 0 ? '+' : ''}
+                          {formatTimeMs(Math.abs(p.delta_ms))}
+                        </>
+                      )}
                     </Td>
                     <Td className="font-mono text-[11px] text-ink-200">
                       {p.reason_code ?? '—'}

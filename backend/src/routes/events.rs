@@ -57,6 +57,12 @@ fn fresh_decider_tokens() -> [String; 4] {
     ]
 }
 
+/// 32 raw bytes → URL-safe base64-no-pad (~43 chars). Used as the
+/// single shared strafrichter token in `/decider/:owner/:token/...`.
+fn fresh_station_token() -> String {
+    random_token(32)
+}
+
 // ===== list / create =====
 
 pub async fn list(
@@ -96,6 +102,7 @@ pub async fn create(
         current_discipline_id: None,
         current_run_id: None,
         decider_tokens: fresh_decider_tokens(),
+        station_token: fresh_station_token(),
         created_at: now,
         updated_at: now,
     };
@@ -166,6 +173,13 @@ pub async fn update(
         ev.location = location
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty());
+    }
+    // Backfill `station_token` for legacy events that predate the
+    // stations feature. Doing it on the first write after deployment
+    // avoids a one-shot migration job and keeps QR codes minting on
+    // the first edit.
+    if ev.station_token.is_empty() {
+        ev.station_token = fresh_station_token();
     }
     ev.updated_at = Utc::now();
     events::put(&state.db, &ev).await?;

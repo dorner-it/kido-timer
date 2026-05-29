@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { ApiError, apiClient, type DeciderState, type TimerMode } from '../../lib/api';
+import {
+  ApiError,
+  STATION_KIND_LABELS,
+  apiClient,
+  type StationKind,
+  type TimerMode,
+} from '../../lib/api';
 import {
   PRESETS_BY_MODE,
   reasonsForMode,
@@ -19,15 +25,37 @@ import {
   type DroppedSubmit,
 } from '../../lib/penalty-queue';
 import { Brandmark } from './Brandmark';
+import StationPicker, {
+  clearStation,
+  loadStation,
+  saveStation,
+} from './StationPicker';
 
-export interface DeciderPadProps {
-  ownerSub: string;
-  /** URL slot param ("1".."4"). Named `slotIndex` rather than `slot`
-   *  because Astro's compiler treats `slot={...}` on a child as the
-   *  named-slot directive, not a prop. */
-  slotIndex: string;
-  token: string;
-}
+/**
+ * The pad runs in two modes:
+ *
+ * - **slot** — legacy route `/decider/:owner/:slot/:token`. The slot
+ *   *is* the identity; no station picker is shown. Kept so QR codes
+ *   minted before the stations feature keep working.
+ *
+ * - **station** — new route `/decider/:owner/:token`. The decider
+ *   picks a station once (persisted to localStorage), every penalty
+ *   carries the station + an optional DQ flag.
+ */
+export type DeciderPadProps =
+  | {
+      ownerSub: string;
+      /** Astro reserves the bare `slot` prop name. */
+      slotIndex: string;
+      token: string;
+      stationToken?: never;
+    }
+  | {
+      ownerSub: string;
+      stationToken: string;
+      slotIndex?: never;
+      token?: never;
+    };
 
 const FLASH_MS = 700;
 
@@ -38,28 +66,59 @@ interface ConfirmedSubmission {
   at: number;
 }
 
-export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadProps) {
-  const slot = Number(slotIndex);
-  const [state, setState] = useState<DeciderState | null>(null);
+interface CommonState {
+  event: { id: string; name: string; date: string; location: string | null };
+  discipline: { id: string; name: string; mode: TimerMode } | null;
+  current_run:
+    | {
+        run: import('../../lib/api').Run;
+        team: import('../../lib/api').Team;
+        runner: import('../../lib/api').Runner | null;
+      }
+    | null;
+  disabled: boolean;
+  /** Only populated in station mode. */
+  allowed_stations?: StationKind[];
+}
+
+export default function DeciderPad(props: DeciderPadProps) {
+  const isStation = 'stationToken' in props && !!props.stationToken;
+  const ownerSub = props.ownerSub;
+  const slotNumber = !isStation ? Number((props as { slotIndex: string }).slotIndex) : null;
+
+  const [state, setState] = useState<CommonState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<ConfirmedSubmission[]>([]);
   const [busy, setBusy] = useState(false);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  const [station, setStation] = useState<StationKind | null>(null);
 
   const presets =
     state && state.discipline ? PRESETS_BY_MODE[state.discipline.mode] : [];
 
-  // Promote drained-queue items to the confirmed list so the operator
-  // sees their late-arriving entries with a withdraw button.
+  // Hydrate the persisted station selection on first render (and any
+  // time the event id changes — moving between events on the same
+  // device starts the picker fresh).
+  useEffect(() => {
+    if (!isStation || !state?.event.id) return;
+    const allowed = state.allowed_stations ?? [];
+    if (allowed.length === 0) return;
+    const found = loadStation(state.event.id, allowed);
+    setStation(found);
+  }, [isStation, state?.event.id, state?.allowed_stations]);
+
   const handleConfirmed = useCallback(
     (entry: { client_id: string; id: string }) => {
       setConfirmed((c) => {
         if (c.some((x) => x.client_id === entry.client_id)) return c;
-        // We don't carry the original label across reloads; show the
-        // confirmed-but-relabelled-from-queue entry generically.
         return [
-          { id: entry.id, client_id: entry.client_id, label: 'Strafe gesendet', at: Date.now() },
+          {
+            id: entry.id,
+            client_id: entry.client_id,
+            label: 'Strafe gesendet',
+            at: Date.now(),
+          },
           ...c,
         ].slice(0, 8);
       });
@@ -77,87 +136,174 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
     () => ({ onConfirmed: handleConfirmed, onDropped: handleDropped }),
     [handleConfirmed, handleDropped],
   );
-
   const { items: queued, online, draining } = usePenaltyQueue(queueOptions);
+
+  const refresh = useCallback(async () => {
+    try {
+      if (isStation) {
+        const r = await apiClient.deciderStation.state(
+          ownerSub,
+          (props as { stationToken: string }).stationToken,
+        );
+        setState({
+          event: r.event,
+          discipline: r.discipline,
+          current_run: r.current_run,
+          disabled: r.disabled,
+          allowed_stations: r.allowed_stations,
+        });
+      } else {
+        const slot = Number((props as { slotIndex: string }).slotIndex);
+        const r = await apiClient.decider.state(
+          ownerSub,
+          slot,
+          (props as { token: string }).token,
+        );
+        setState({
+          event: r.event,
+          discipline: r.discipline,
+          current_run: r.current_run,
+          disabled: r.disabled,
+        });
+      }
+      setError(null);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 401) setError('Ungültiger Token. QR-Code neu laden.');
+        else if (err.status === 404) setError('Aktuell kein aktiver Wettkampf.');
+        else setError(err.message);
+      } else {
+        setError('Verbindung verloren. Neu versuchen …');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStation, ownerSub]);
 
   useEffect(() => {
     refresh();
     const t = window.setInterval(refresh, 4000);
     return () => window.clearInterval(t);
-  }, [ownerSub, slot, token]);
-
-  const refresh = async () => {
-    try {
-      setState(await apiClient.decider.state(ownerSub, slot, token));
-      setError(null);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.status === 401) {
-          setError('Ungültiger Token. QR-Code neu laden.');
-        } else if (err.status === 404) {
-          setError('Aktuell kein aktiver Wettkampf.');
-        } else {
-          setError(err.message);
-        }
-      } else {
-        setError('Verbindung verloren. Neu versuchen …');
-      }
-    }
-  };
+  }, [refresh]);
 
   const submit = async (
     flash: string,
     label: string,
     deltaMs: number,
     reason: string | null,
+    opts: { dq?: boolean } = {},
   ) => {
     if (busy) return;
     if (!state?.current_run) {
       setError('Aktuell läuft kein Lauf.');
       return;
     }
+    if (isStation && !station) {
+      setError('Bitte zuerst eine Station wählen.');
+      return;
+    }
     setBusy(true);
 
-    const queueItem = {
-      client_id: clientId(),
-      owner_sub: ownerSub,
-      slot,
-      token,
-      delta_ms: deltaMs,
-      reason_code: reason,
-      label,
-      queued_at: Date.now(),
-    };
-
-    // Always flash + vibrate immediately so the tap feels responsive
-    // even if the backend hasn't acknowledged yet. The operator sees
-    // *something happened*; the queue takes over from there.
     setFlashKey(flash);
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       navigator.vibrate(50);
     }
     window.setTimeout(() => setFlashKey((k) => (k === flash ? null : k)), FLASH_MS);
 
+    const cid = clientId();
     try {
-      const result = await attemptSubmit(queueItem);
+      let result: { ok: true; id: string } | { ok: false; retriable: boolean; status: number | null; message: string };
+      if (isStation) {
+        // Station flow bypasses the queue-store (which is slot-typed)
+        // and posts directly. Offline retry is best-effort: if this
+        // throws, the operator re-taps after reconnection.
+        try {
+          const body: {
+            station: StationKind;
+            client_id: string;
+            delta_ms?: number;
+            is_disqualification?: boolean;
+            reason_code?: string | null;
+          } = {
+            station: station!,
+            client_id: cid,
+            reason_code: reason,
+          };
+          if (opts.dq) {
+            body.is_disqualification = true;
+          } else {
+            body.delta_ms = deltaMs;
+          }
+          const created = await apiClient.deciderStation.submit(
+            ownerSub,
+            (props as { stationToken: string }).stationToken,
+            body,
+          );
+          result = { ok: true, id: created.id };
+        } catch (e) {
+          if (e instanceof ApiError) {
+            result = {
+              ok: false,
+              retriable: e.status >= 500,
+              status: e.status,
+              message: e.message,
+            };
+          } else {
+            result = {
+              ok: false,
+              retriable: true,
+              status: null,
+              message: e instanceof Error ? e.message : 'Netzwerkfehler',
+            };
+          }
+        }
+      } else {
+        const queueItem = {
+          client_id: cid,
+          owner_sub: ownerSub,
+          slot: slotNumber!,
+          token: (props as { token: string }).token,
+          delta_ms: deltaMs,
+          reason_code: reason,
+          label,
+          queued_at: Date.now(),
+        };
+        result = await attemptSubmit(queueItem);
+        if (!result.ok && result.retriable) {
+          penaltyQueue.enqueue(queueItem);
+        }
+      }
+
       if (result.ok) {
         setConfirmed((c) =>
           [
-            { id: result.id, client_id: queueItem.client_id, label, at: Date.now() },
+            { id: result.id, client_id: cid, label, at: Date.now() },
             ...c,
           ].slice(0, 8),
         );
         setError(null);
-      } else if (result.retriable) {
-        penaltyQueue.enqueue(queueItem);
-      } else {
-        droppedLog.push({
-          ...queueItem,
-          dropped_at: Date.now(),
-          reason: result.message,
-          http_status: result.status,
-        });
+      } else if (!result.retriable) {
+        if (!isStation) {
+          droppedLog.push({
+            client_id: cid,
+            owner_sub: ownerSub,
+            slot: slotNumber!,
+            token: (props as { token: string }).token,
+            delta_ms: deltaMs,
+            reason_code: reason,
+            label,
+            queued_at: Date.now(),
+            dropped_at: Date.now(),
+            reason: result.message,
+            http_status: result.status,
+          });
+        }
         setError(`Strafe abgelehnt (${result.message}). Bitte nochmal eingeben.`);
+      } else {
+        setError(
+          isStation
+            ? `Netzwerkfehler — bitte erneut tippen.`
+            : `Sendung gepuffert (${result.message}).`,
+        );
       }
     } finally {
       setBusy(false);
@@ -165,18 +311,56 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
   };
 
   const withdraw = async (target: { client_id: string; id?: string }) => {
-    // Queued (not yet sent) → just remove locally.
     if (!target.id) {
       penaltyQueue.remove(target.client_id);
       return;
     }
     try {
-      await apiClient.decider.withdraw(ownerSub, slot, token, target.id);
+      if (isStation) {
+        await apiClient.deciderStation.withdraw(
+          ownerSub,
+          (props as { stationToken: string }).stationToken,
+          target.id,
+          station,
+        );
+      } else {
+        await apiClient.decider.withdraw(
+          ownerSub,
+          slotNumber!,
+          (props as { token: string }).token,
+          target.id,
+        );
+      }
       setConfirmed((c) => c.filter((x) => x.client_id !== target.client_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Zurückziehen fehlgeschlagen');
     }
   };
+
+  // ------------------- station picker gating (station mode only) -------
+  const showStationPicker =
+    isStation && state && !station && (state.allowed_stations ?? []).length > 0;
+
+  const changeStation = () => {
+    if (!state?.event.id || !isStation) return;
+    if (window.confirm('Station wechseln? Bisherige Auswahl wird verworfen.')) {
+      clearStation(state.event.id);
+      setStation(null);
+    }
+  };
+
+  if (showStationPicker && state) {
+    return (
+      <StationPicker
+        eventId={state.event.id}
+        allowed={state.allowed_stations ?? []}
+        onPicked={(s) => {
+          saveStation(state.event.id, s);
+          setStation(s);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -197,10 +381,27 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
         </div>
         <ConnectivityPill online={online} pending={queued.length} draining={draining} />
         <div className="flex flex-col items-end leading-tight">
-          <span className="font-stencil text-[28px] font-bold text-signal-glow leading-none tnum">
-            B{slot}
-          </span>
-          <span className="label">Slot</span>
+          {isStation ? (
+            <>
+              <span className="font-stencil text-[20px] font-bold text-signal-glow leading-none">
+                {station ? STATION_KIND_LABELS[station] : '—'}
+              </span>
+              <button
+                type="button"
+                className="label underline-offset-2 hover:underline"
+                onClick={changeStation}
+              >
+                Station ändern
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="font-stencil text-[28px] font-bold text-signal-glow leading-none tnum">
+                B{slotNumber}
+              </span>
+              <span className="label">Slot</span>
+            </>
+          )}
         </div>
       </header>
 
@@ -274,6 +475,25 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
               </button>
             </div>
 
+            {/* DQ button — station mode only, only when the active
+                discipline is on a DQ-capable mode (i.e. Löschangriff
+                and Staffel; single_lane/individual currently mirror
+                the same rule but the data is the source of truth). */}
+            {isStation && state.discipline && isDqAllowed(state.discipline.mode) && (
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  disabled={!state.current_run || busy || !station}
+                  onClick={() =>
+                    submit('dq', 'Disqualifikation', 0, 'dsq', { dq: true })
+                  }
+                  className="btn btn-danger px-8 py-4 font-stencil text-[18px]"
+                >
+                  Disqualifikation melden
+                </button>
+              </div>
+            )}
+
             {customOpen && state.discipline && (
               <CustomPenaltyForm
                 mode={state.discipline.mode}
@@ -293,54 +513,66 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
         )}
 
         {state && !state.disabled && (
-        <section className="mt-10">
-          <span className="label">Eigene Eingaben</span>
-          {queued.length === 0 && confirmed.length === 0 ? (
-            <p className="mt-2 font-mono text-[12px] text-ink-200">Noch nichts gesendet.</p>
-          ) : (
-            <ul className="mt-3 flex flex-col divide-y divide-[color:var(--hairline-color)]">
-              {queued.map((q) => (
-                <li
-                  key={q.client_id}
-                  className="flex items-center justify-between gap-3 py-3"
-                >
-                  <span className="flex items-center gap-2 font-display text-[15px] text-status-armed">
-                    <span className="h-1.5 w-1.5 rounded-full bg-status-armed animate-pulse" />
-                    {q.label}
-                  </span>
-                  <span className="label">wird gesendet …</span>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    onClick={() => withdraw({ client_id: q.client_id })}
+          <section className="mt-10">
+            <span className="label">Eigene Eingaben</span>
+            {queued.length === 0 && confirmed.length === 0 ? (
+              <p className="mt-2 font-mono text-[12px] text-ink-200">
+                Noch nichts gesendet.
+              </p>
+            ) : (
+              <ul className="mt-3 flex flex-col divide-y divide-[color:var(--hairline-color)]">
+                {queued.map((q) => (
+                  <li
+                    key={q.client_id}
+                    className="flex items-center justify-between gap-3 py-3"
                   >
-                    Verwerfen
-                  </button>
-                </li>
-              ))}
-              {confirmed.map((r) => (
-                <li
-                  key={r.client_id}
-                  className="flex items-center justify-between gap-3 py-3"
-                >
-                  <span className="font-display text-[15px] text-ink-50">{r.label}</span>
-                  <span className="label">{relativeTime(r.at)}</span>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    onClick={() => withdraw({ client_id: r.client_id, id: r.id })}
+                    <span className="flex items-center gap-2 font-display text-[15px] text-status-armed">
+                      <span className="h-1.5 w-1.5 rounded-full bg-status-armed animate-pulse" />
+                      {q.label}
+                    </span>
+                    <span className="label">wird gesendet …</span>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => withdraw({ client_id: q.client_id })}
+                    >
+                      Verwerfen
+                    </button>
+                  </li>
+                ))}
+                {confirmed.map((r) => (
+                  <li
+                    key={r.client_id}
+                    className="flex items-center justify-between gap-3 py-3"
                   >
-                    Zurückziehen
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                    <span className="font-display text-[15px] text-ink-50">
+                      {r.label}
+                    </span>
+                    <span className="label">{relativeTime(r.at)}</span>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => withdraw({ client_id: r.client_id, id: r.id })}
+                    >
+                      Zurückziehen
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         )}
       </main>
     </div>
   );
+}
+
+/** Which modes allow a dedicated DQ submission. All four currently do
+ *  — the rule is "discipline declares disqualifications meaningful"
+ *  not "mode declares it", so we accept everything for now. Easy to
+ *  tighten once the discipline-mode mapping is finalised. */
+function isDqAllowed(_mode: TimerMode): boolean {
+  return true;
 }
 
 function CurrentRunBanner(props: {
