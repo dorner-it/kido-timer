@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::db::client::DbClient;
 use crate::db::keys;
 use crate::error::{AppError, AppResult};
-use crate::models::TeamEntry;
+use crate::models::{TeamEntry, Wertungsgruppe};
 
 #[derive(Serialize, Deserialize)]
 struct TeamEntryItem {
@@ -24,6 +24,9 @@ struct TeamEntryItem {
     event_id: Uuid,
     start_number: u32,
     lane: Option<u8>,
+    /// Tolerates rows written before the `wg` migration.
+    #[serde(default)]
+    wg: Option<Wertungsgruppe>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -39,6 +42,7 @@ impl TeamEntryItem {
             event_id: e.event_id,
             start_number: e.start_number,
             lane: e.lane,
+            wg: e.wg,
             created_at: e.created_at,
             updated_at: e.updated_at,
         }
@@ -51,6 +55,7 @@ impl TeamEntryItem {
             event_id: self.event_id,
             start_number: self.start_number,
             lane: self.lane,
+            wg: self.wg,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

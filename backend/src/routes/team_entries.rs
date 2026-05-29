@@ -9,9 +9,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
-use crate::db::{disciplines, team_entries};
+use crate::db::{disciplines, runners, team_entries};
 use crate::error::{AppError, AppResult};
-use crate::models::TeamEntry;
+use crate::models::{TeamEntry, WgError, Wertungsgruppe};
 use crate::routes::events::require_owned;
 use crate::state::AppState;
 
@@ -43,7 +43,7 @@ pub async fn upsert(
     Path((event_id, discipline_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<TeamEntryInput>,
 ) -> AppResult<(StatusCode, Json<TeamEntry>)> {
-    require_owned(&state, &auth, event_id).await?;
+    let event = require_owned(&state, &auth, event_id).await?;
 
     let _disc = disciplines::find(&state.db, event_id, discipline_id)
         .await?
@@ -54,6 +54,19 @@ pub async fn upsert(
             return Err(AppError::Validation("lane must be 1 or 2".into()));
         }
     }
+
+    // Derive WG from the team's current roster against the event date
+    // **before** any mutation, so an inconsistent roster fails fast
+    // without orphaning the previously-stored entry. The stamp is
+    // persisted; later roster edits don't recompute it (re-POST the
+    // entry to refresh).
+    let roster = runners::list_for_team(&state.db, event_id, input.team_id).await?;
+    let wg = match Wertungsgruppe::derive(&roster, event.date) {
+        Ok(w) => w,
+        Err(WgError::Inconsistent { reason }) => {
+            return Err(AppError::WgInconsistent(reason));
+        }
+    };
 
     // If an entry exists for (team_id, discipline_id), it may have a
     // different start_number — remove it before writing the new one.
@@ -73,6 +86,7 @@ pub async fn upsert(
         event_id,
         start_number: input.start_number,
         lane: input.lane,
+        wg: Some(wg),
         created_at: existing.as_ref().map(|e| e.created_at).unwrap_or(now),
         updated_at: now,
     };

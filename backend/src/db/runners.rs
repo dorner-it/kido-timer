@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::db::client::DbClient;
 use crate::db::keys;
 use crate::error::{AppError, AppResult};
-use crate::models::Runner;
+use crate::models::{Gender, Runner};
 
 #[derive(Serialize, Deserialize)]
 struct RunnerItem {
@@ -26,6 +26,9 @@ struct RunnerItem {
     last_name: String,
     birth_date: NaiveDate,
     position: u32,
+    /// Tolerates rows written before the `gender` migration.
+    #[serde(default)]
+    gender: Option<Gender>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -43,6 +46,7 @@ impl RunnerItem {
             last_name: r.last_name.clone(),
             birth_date: r.birth_date,
             position: r.position,
+            gender: r.gender,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -57,6 +61,7 @@ impl RunnerItem {
             last_name: self.last_name,
             birth_date: self.birth_date,
             position: self.position,
+            gender: self.gender,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
