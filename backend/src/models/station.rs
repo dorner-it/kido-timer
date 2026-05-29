@@ -9,11 +9,6 @@ use crate::models::timer_mode::TimerMode;
 /// another at "Strahlrohr", and so on. The station they pick gets
 /// recorded on every penalty so the organiser can see *where* a fault
 /// was observed, not just *who* observed it.
-///
-/// Variants are kept loosely aligned with the German Feuerwehr-
-/// Wettkampfordnung. Edit the list once the parallel branch finalises
-/// the discipline / mode mapping; allow_for() is intentionally defensive
-/// so the set continues to typecheck if `TimerMode` is rewritten later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StationKind {
@@ -52,31 +47,19 @@ impl StationKind {
 
     /// Whether this station can be staffed under the given timer mode.
     ///
-    /// Stations `Podest` and `Strahlrohrlinie` are Löschangriff-only and
-    /// therefore restricted to `TwoLaneParallel`. Everything else is
-    /// available in every mode.
-    ///
-    /// TODO: the parallel feature branch is rewriting `TimerMode`. Once
-    /// it lands, revisit this mapping and add discipline-aware branches.
-    /// Until then we keep a defensive fallback so the helper continues
-    /// to compile even if new variants are added: any unknown mode gets
-    /// the common (non-Löschangriff) set.
+    /// Stations `Podest` and `Strahlrohrlinie` are Löschangriff-only.
+    /// Everything else is available in every discipline.
     pub fn allowed_for(self, mode: TimerMode) -> bool {
         match self {
             StationKind::Podest | StationKind::Strahlrohrlinie => {
-                matches!(mode, TimerMode::TwoLaneParallel)
+                matches!(mode, TimerMode::Loeschangriff)
             }
-            // Common stations: usable in every mode that currently exists.
-            // The catch-all keeps this defensive against TimerMode growing.
             StationKind::Start
             | StationKind::Verteiler
             | StationKind::Strahlrohr
             | StationKind::Knoten
             | StationKind::Kuebelspritze => match mode {
-                TimerMode::SingleLane
-                | TimerMode::TwoLaneParallel
-                | TimerMode::Relay
-                | TimerMode::Individual => true,
+                TimerMode::Gruppenstaffette | TimerMode::Loeschangriff => true,
             },
         }
     }
@@ -118,24 +101,17 @@ mod tests {
     }
 
     #[test]
-    fn loeschangriff_only_stations_are_two_lane() {
-        assert!(StationKind::Podest.allowed_for(TimerMode::TwoLaneParallel));
-        assert!(!StationKind::Podest.allowed_for(TimerMode::SingleLane));
-        assert!(!StationKind::Podest.allowed_for(TimerMode::Relay));
-        assert!(!StationKind::Podest.allowed_for(TimerMode::Individual));
+    fn loeschangriff_only_stations_are_loeschangriff() {
+        assert!(StationKind::Podest.allowed_for(TimerMode::Loeschangriff));
+        assert!(!StationKind::Podest.allowed_for(TimerMode::Gruppenstaffette));
 
-        assert!(StationKind::Strahlrohrlinie.allowed_for(TimerMode::TwoLaneParallel));
-        assert!(!StationKind::Strahlrohrlinie.allowed_for(TimerMode::SingleLane));
+        assert!(StationKind::Strahlrohrlinie.allowed_for(TimerMode::Loeschangriff));
+        assert!(!StationKind::Strahlrohrlinie.allowed_for(TimerMode::Gruppenstaffette));
     }
 
     #[test]
     fn common_stations_are_universal() {
-        for mode in [
-            TimerMode::SingleLane,
-            TimerMode::TwoLaneParallel,
-            TimerMode::Relay,
-            TimerMode::Individual,
-        ] {
+        for mode in [TimerMode::Gruppenstaffette, TimerMode::Loeschangriff] {
             for s in [
                 StationKind::Start,
                 StationKind::Verteiler,
@@ -149,10 +125,8 @@ mod tests {
     }
 
     #[test]
-    fn for_mode_returns_seven_for_loeschangriff_five_otherwise() {
-        assert_eq!(StationKind::for_mode(TimerMode::TwoLaneParallel).len(), 7);
-        assert_eq!(StationKind::for_mode(TimerMode::SingleLane).len(), 5);
-        assert_eq!(StationKind::for_mode(TimerMode::Relay).len(), 5);
-        assert_eq!(StationKind::for_mode(TimerMode::Individual).len(), 5);
+    fn for_mode_returns_seven_for_loeschangriff_five_for_gruppenstaffette() {
+        assert_eq!(StationKind::for_mode(TimerMode::Loeschangriff).len(), 7);
+        assert_eq!(StationKind::for_mode(TimerMode::Gruppenstaffette).len(), 5);
     }
 }
