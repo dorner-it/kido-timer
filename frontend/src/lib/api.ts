@@ -74,9 +74,16 @@ function redirectToLogin() {
   window.location.replace(`/login?${params}`);
 }
 
-// ===== domain types — mirror the backend (schema v2) =====
+// ===== domain types — mirror the backend (schema v3) =====
 
-export type TimerMode = 'single_lane' | 'two_lane_parallel' | 'relay' | 'individual';
+/**
+ * Discipline-specific timer modes.
+ *
+ * v3 replaces the generic v1 enum (`single_lane`, `two_lane_parallel`,
+ * `relay`, `individual`) with the disciplines actually run on TRV Kocab
+ * hardware. Lane counts are intrinsic — see {@link TIMER_MODE_LANE_COUNT}.
+ */
+export type TimerMode = 'gruppenstaffette' | 'loeschangriff';
 export type SyncMode = 'live' | 'offline';
 export type RunStatus = 'pending' | 'active' | 'completed' | 'cancelled';
 export type PenaltyStatus = 'pending' | 'approved' | 'rejected';
@@ -505,10 +512,14 @@ export const apiClient = {
 };
 
 export const TIMER_MODE_LABELS: Record<TimerMode, string> = {
-  single_lane: 'Einzelbahn',
-  two_lane_parallel: 'Zwei Bahnen parallel',
-  relay: 'Staffel',
-  individual: 'Einzellauf',
+  gruppenstaffette: 'Gruppenstaffette (2 Bahnen)',
+  loeschangriff: 'Löschangriff (4 Bahnen)',
+};
+
+/** Number of lanes a discipline occupies on the TRV Kocab hardware. */
+export const TIMER_MODE_LANE_COUNT: Record<TimerMode, number> = {
+  gruppenstaffette: 2,
+  loeschangriff: 4,
 };
 
 export const RUN_STATUS_LABELS: Record<RunStatus, string> = {

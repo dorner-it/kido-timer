@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import {
   ApiError,
   TIMER_MODE_LABELS,
+  TIMER_MODE_LANE_COUNT,
   WERTUNGSGRUPPE_DESCRIPTIONS,
   WERTUNGSGRUPPE_LABELS,
   apiClient,
@@ -64,7 +65,8 @@ export default function EntriesPanel({ data, onChange }: Props) {
     <section className="flex flex-col gap-5">
       <p className="font-mono text-[12px] text-ink-200">
         Welche Mannschaft startet in welchem Wettkampf? Startnummern und
-        (bei Zweibahn-Modi) Bahn-Zuordnung pro Disziplin.
+        Bahn-Zuordnung pro Disziplin (2 Bahnen bei Gruppenstaffette,
+        4 Bahnen bei Löschangriff).
       </p>
 
       {error && (
@@ -79,8 +81,10 @@ export default function EntriesPanel({ data, onChange }: Props) {
         const availableTeams = teams
           .filter((t) => !usedTeamIds.has(t.id))
           .sort((a, b) => a.position - b.position);
-        const wantsLanes =
-          d.mode === 'two_lane_parallel' || d.mode === 'individual';
+        // Lane count comes from the discipline mode (2 for
+        // Gruppenstaffette, 4 for Löschangriff). Both v3 modes have >1
+        // lanes, so a Bahn-Spalte is always shown.
+        const laneCount = TIMER_MODE_LANE_COUNT[d.mode];
         const nextStartNumber =
           (entries[entries.length - 1]?.start_number ?? 0) + 1;
         return (
@@ -91,7 +95,7 @@ export default function EntriesPanel({ data, onChange }: Props) {
             entries={entries}
             teamById={teamById}
             availableTeams={availableTeams}
-            wantsLanes={wantsLanes}
+            laneCount={laneCount}
             nextStartNumber={nextStartNumber}
             onChange={onChange}
             onError={setError}
@@ -108,7 +112,7 @@ function DisciplineEntriesBlock({
   entries,
   teamById,
   availableTeams,
-  wantsLanes,
+  laneCount,
   nextStartNumber,
   onChange,
   onError,
@@ -118,11 +122,13 @@ function DisciplineEntriesBlock({
   entries: TeamEntry[];
   teamById: Map<string, Team>;
   availableTeams: Team[];
-  wantsLanes: boolean;
+  laneCount: number;
   nextStartNumber: number;
   onChange: () => void;
   onError: (msg: string) => void;
 }) {
+  const wantsLanes = laneCount > 1;
+  const laneOptions = Array.from({ length: laneCount }, (_, i) => i + 1);
   const [addOpen, setAddOpen] = useState(false);
 
   const upsert = async (entry: {
@@ -185,6 +191,7 @@ function DisciplineEntriesBlock({
         <AddEntryRow
           availableTeams={availableTeams}
           wantsLanes={wantsLanes}
+          laneOptions={laneOptions}
           defaultStartNumber={nextStartNumber}
           onSubmit={async (entry) => {
             await upsert(entry);
@@ -218,6 +225,7 @@ function DisciplineEntriesBlock({
                   entry={e}
                   team={team}
                   wantsLanes={wantsLanes}
+                  laneOptions={laneOptions}
                   onCommit={(patch) => upsert({ ...e, ...patch })}
                   onRemove={() => remove(e.team_id)}
                 />
@@ -233,12 +241,14 @@ function DisciplineEntriesBlock({
 function AddEntryRow({
   availableTeams,
   wantsLanes,
+  laneOptions,
   defaultStartNumber,
   onSubmit,
   onCancel,
 }: {
   availableTeams: Team[];
   wantsLanes: boolean;
+  laneOptions: number[];
   defaultStartNumber: number;
   onSubmit: (input: {
     team_id: string;
@@ -307,8 +317,11 @@ function AddEntryRow({
             onChange={(e) => setLane(e.target.value)}
           >
             <option value="">—</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
+            {laneOptions.map((n) => (
+              <option key={n} value={String(n)}>
+                {n}
+              </option>
+            ))}
           </select>
         ) : (
           <input className="input" value="—" disabled />
@@ -330,12 +343,14 @@ function EntryRow({
   entry,
   team,
   wantsLanes,
+  laneOptions,
   onCommit,
   onRemove,
 }: {
   entry: TeamEntry;
   team: Team | undefined;
   wantsLanes: boolean;
+  laneOptions: number[];
   onCommit: (patch: { start_number?: number; lane?: number | null }) => void;
   onRemove: () => void;
 }) {
@@ -364,8 +379,11 @@ function EntryRow({
             }}
           >
             <option value="">—</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
+            {laneOptions.map((n) => (
+              <option key={n} value={String(n)}>
+                {n}
+              </option>
+            ))}
           </select>
         </td>
       )}

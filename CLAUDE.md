@@ -202,9 +202,9 @@ ki-do-timer-web/
 - `id`: UUID — one row per timing result (matches the desktop app's `RunEntry` concept: a confirmed time on a lane).
 - `competition_id`: UUID
 - `team_id`: UUID
-- `runner_id`: Option<UUID> (set for `Relay` and `Individual` modes; usually `None` for `SingleLane` / `TwoLaneParallel` where the team-as-a-whole runs)
+- `runner_id`: Option<UUID> (typically `None` — the team runs as a unit on both v3 modes)
 - `run_number`: u32 (1-indexed; e.g. heat 1, heat 2 of the same team)
-- `lane`: Option<u8> (1..=2 for parallel modes; `None` otherwise)
+- `lane`: Option<u8> (1..=`TimerMode.lane_count()`; 1..=2 for Gruppenstaffette, 1..=4 for Löschangriff)
 - `status`: enum `Pending | Active | Completed | Cancelled`. Exactly zero or one `Active` run per competition.
 - `original_time_ms`: Option<u32> — set by the desktop app on result import or manually by the organizer.
 - `correction_ms`: i32 — denormalized sum of approved penalties' `delta_ms`, kept on the run row for fast display.
@@ -227,20 +227,22 @@ ki-do-timer-web/
 
 ### 4.2 TimerMode
 
-Locked v1 set (the desktop app does not yet implement modes; this is the authoritative list both sides will mirror):
+v3 (current). Discipline-specific — lane count is intrinsic to the variant.
 
 ```rust
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimerMode {
-    SingleLane,        // one team on one lane, one timer running
-    TwoLaneParallel,   // two teams running simultaneously on two lanes (Löschangriff)
-    Relay,             // one team, multiple runners with handoffs (Staffellauf)
-    Individual,        // one runner at a time, individual times
+    Gruppenstaffette,  // 2 lanes, group-vs-group relay format
+    Loeschangriff,     // 4 lanes, classic fire-attack discipline
 }
 ```
 
-Adding a variant later requires a coordinated release with the desktop app.
+The v1 generic set (`SingleLane | TwoLaneParallel | Relay | Individual`)
+is gone; old strings are rejected with `400 validation`. See
+`docs/migration-timer-mode.md` for the in-place DDB rewrite.
+
+Adding a variant requires a coordinated release with the desktop app.
 
 ---
 
@@ -482,12 +484,12 @@ The desktop app at ki-do.it expects to call `/api/export/competitions/:id` and r
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "competition": {
     "id": "…",
     "name": "…",
     "date": "2026-06-12",
-    "mode": "TwoLaneParallel",
+    "mode": "loeschangriff",
     "location": "…",
     "teams": [
       {
@@ -528,7 +530,7 @@ When invoked in an empty directory with this file present:
 ### Resolved
 
 - **Auth:** AWS Cognito User Pool + Hosted UI. The web app holds zero password material. Confirmed 2026-05-02.
-- **TimerMode:** locked to `SingleLane | TwoLaneParallel | Relay | Individual` (§4.2). The desktop app has not yet implemented modes; both sides will mirror this list.
+- **TimerMode:** v3 set, discipline-specific — `Gruppenstaffette` (2 lanes) and `Loeschangriff` (4 lanes); see §4.2 and `docs/migration-timer-mode.md`. Old v1 strings are rejected with `400 validation`.
 - **Penalty granularity:** penalties attach to a `Run` row (a team running multiple heats has separate penalty buckets). Run mirrors the desktop app's `RunEntry` (`originalTimeMs` + `correctionMs`).
 - **AWS account & infra:** same account as `../fms/` (eu-central-1, state bucket `dorner-it-fms-terraform-state`, lock table `fms-terraform-locks`).
 - **CI:** Terraform plan/apply runs from GitHub Actions via OIDC. Lambda deploy runs from GitHub Actions on `backend/**` changes.

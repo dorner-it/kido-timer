@@ -185,8 +185,8 @@ function DisciplinesPanel({
     <section className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <p className="font-mono text-[12px] text-ink-200">
-          Lege pro Wettkampf eine Disziplin an (Löschangriff, Staffel, …). Jeder
-          Wettkampf hat seinen eigenen Timer-Modus und Live/Offline-Status.
+          Lege pro Wettkampf eine Disziplin an (Löschangriff oder Gruppenstaffette).
+          Jeder Wettkampf hat seinen eigenen Modus (Bahnenzahl) und Live/Offline-Status.
         </p>
         <button
           type="button"
@@ -329,7 +329,7 @@ function DisciplineCard({
   );
 }
 
-const TIMER_MODES: TimerMode[] = ['single_lane', 'two_lane_parallel', 'relay', 'individual'];
+const TIMER_MODES: TimerMode[] = ['gruppenstaffette', 'loeschangriff'];
 
 function DisciplineForm({
   eventId,
@@ -341,7 +341,7 @@ function DisciplineForm({
   onDone: () => void;
 }) {
   const [name, setName] = useState('');
-  const [mode, setMode] = useState<TimerMode>('two_lane_parallel');
+  const [mode, setMode] = useState<TimerMode>('loeschangriff');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -378,7 +378,7 @@ function DisciplineForm({
           className="input"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="z.B. Löschangriff, Staffel 4×100"
+          placeholder="z.B. Löschangriff Männer, Gruppenstaffette Jugend"
           autoFocus
         />
       </div>
