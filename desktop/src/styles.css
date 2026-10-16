@@ -1,0 +1,289 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ----------------------------------------------------------------------- */
+  /*  Light theme (default)                                                  */
+  /*  Designed to feel like a precision instrument console rendered in       */
+  /*  warm white — clean surfaces, subtle elevations, deep status colors.    */
+  /* ----------------------------------------------------------------------- */
+  :root {
+    color-scheme: light;
+
+    /* Greyscale / "ink" — name kept for backwards compat. The semantic
+       intent is unchanged: 900 = page bg, 50 = strongest contrast. */
+    --c-ink-900: 250 249 246; /* warm off-white page bg */
+    --c-ink-800: 255 255 255; /* card surface */
+    --c-ink-700: 244 243 238; /* secondary surface */
+    --c-ink-600: 232 230 222;
+    --c-ink-500: 211 208 198;
+    --c-ink-400: 152 148 138;
+    --c-ink-300: 105 100 90;  /* faint text */
+    --c-ink-200: 70 65 56;    /* secondary text */
+    --c-ink-100: 32 28 22;    /* primary text */
+    --c-ink-50:  12 10 6;     /* strongest contrast */
+
+    /* Status accents — deeper shades for white-bg contrast */
+    --c-status-inactive: 152 148 158;
+    --c-status-armed:    217 119 6;   /* amber-600 */
+    --c-status-running:  101 163 13;  /* lime-700 */
+    --c-status-captured: 234 88 12;   /* orange-600 */
+    --c-status-confirmed: 22 163 74;  /* green-600 */
+    --c-status-unknown:  220 38 38;   /* red-600 */
+
+    --c-signal:      255 77 46;
+    --c-signal-glow: 230 60 30;
+
+    /* Page background composition */
+    --bg-page:
+      radial-gradient(1200px 800px at 12% -10%, rgba(255, 77, 46, 0.05), transparent 60%),
+      radial-gradient(900px 700px at 110% 110%, rgba(22, 163, 74, 0.04), transparent 55%),
+      linear-gradient(180deg, #fbfaf6 0%, #ffffff 60%, #f5f4ee 100%);
+
+    /* Elevation shadows */
+    --shadow-glow:           0 1px 2px rgba(20,15,10,0.04), 0 18px 40px -18px rgba(20,15,10,0.10);
+    --shadow-glow-running:   0 0 0 1px rgba(101,163,13,0.20), 0 16px 40px -12px rgba(101,163,13,0.28);
+    --shadow-glow-confirmed: 0 0 0 1px rgba(22,163,74,0.22), 0 16px 40px -12px rgba(22,163,74,0.28);
+    --shadow-glow-captured:  0 0 0 1px rgba(234,88,12,0.22), 0 16px 40px -12px rgba(234,88,12,0.28);
+
+    /* Theme-specific tokens used in component CSS */
+    --grain-blend: multiply;
+    --grain-opacity: 0.04;
+
+    --watermark-color: rgba(20, 15, 10, 0.04);
+    --scanline-color:  rgba(20, 15, 10, 0.025);
+
+    --time-color:          rgb(var(--c-ink-50));
+    --time-color-inactive: rgb(208 205 198);
+
+    --time-shadow-running:   0 0 22px rgba(101,163,13,0.28);
+    --time-shadow-confirmed: 0 0 18px rgba(22,163,74,0.28);
+
+    --hairline-color: rgba(20, 15, 10, 0.06);
+    --soft-fill:      rgba(20, 15, 10, 0.04);
+
+    --selection-bg: rgba(255, 77, 46, 0.22);
+    --selection-fg: rgb(20, 15, 10);
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /*  Dark theme                                                             */
+  /* ----------------------------------------------------------------------- */
+  [data-theme="dark"] {
+    color-scheme: dark;
+
+    --c-ink-900: 8 8 11;
+    --c-ink-800: 12 12 17;
+    --c-ink-700: 19 19 26;
+    --c-ink-600: 27 27 37;
+    --c-ink-500: 38 38 53;
+    --c-ink-400: 58 58 78;
+    --c-ink-300: 91 91 115;
+    --c-ink-200: 150 150 171;
+    --c-ink-100: 205 205 224;
+    --c-ink-50:  241 241 247;
+
+    --c-status-inactive: 58 58 78;
+    --c-status-armed:    251 191 36; /* amber-400 */
+    --c-status-running:  163 230 53; /* lime-400 */
+    --c-status-captured: 251 146 60; /* orange-400 */
+    --c-status-confirmed: 34 197 94; /* green-500 */
+    --c-status-unknown:  239 68 68;  /* red-500 */
+
+    --c-signal:      255 77 46;
+    --c-signal-glow: 255 122 91;
+
+    --bg-page:
+      radial-gradient(1200px 800px at 12% -10%, rgba(255, 77, 46, 0.07), transparent 60%),
+      radial-gradient(900px 700px at 110% 110%, rgba(34, 197, 94, 0.05), transparent 55%),
+      linear-gradient(180deg, #08080b 0%, #0c0c11 60%, #08080b 100%);
+
+    --shadow-glow:           0 0 0 1px rgba(255,255,255,0.04), 0 24px 60px -20px rgba(0,0,0,0.6);
+    --shadow-glow-running:   0 0 0 1px rgba(163,230,53,0.30), 0 0 60px -10px rgba(163,230,53,0.55);
+    --shadow-glow-confirmed: 0 0 0 1px rgba(34,197,94,0.32), 0 0 70px -10px rgba(34,197,94,0.55);
+    --shadow-glow-captured:  0 0 0 1px rgba(251,146,60,0.32), 0 0 70px -10px rgba(251,146,60,0.50);
+
+    --grain-blend: overlay;
+    --grain-opacity: 0.06;
+
+    --watermark-color: rgba(255, 255, 255, 0.025);
+    --scanline-color:  rgba(255, 255, 255, 0.025);
+
+    --time-color:          rgb(241 241 247);
+    --time-color-inactive: rgb(58 58 78);
+
+    --time-shadow-running:   0 0 30px rgba(163,230,53,0.40);
+    --time-shadow-confirmed: 0 0 24px rgba(34,197,94,0.40);
+
+    --hairline-color: rgba(255, 255, 255, 0.05);
+    --soft-fill:      rgba(255, 255, 255, 0.04);
+
+    --selection-bg: rgba(255, 77, 46, 0.40);
+    --selection-fg: white;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    font-family: theme("fontFamily.display");
+    font-feature-settings: "ss01", "ss02", "cv11";
+    background: var(--bg-page);
+    color: rgb(var(--c-ink-50));
+    overflow: hidden; /* desktop app, no body scroll */
+    transition: background-color 0.3s ease;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 50;
+    opacity: var(--grain-opacity);
+    mix-blend-mode: var(--grain-blend);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.5'/></svg>");
+  }
+
+  ::selection {
+    background: var(--selection-bg);
+    color: var(--selection-fg);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
+
+@layer components {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .label {
+    @apply font-mono uppercase tracking-[0.18em] text-[10px] text-ink-200/70;
+  }
+
+  .surface {
+    border-radius: theme("borderRadius.2xl");
+    background: rgb(var(--c-ink-800) / 0.85);
+    backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-glow);
+    border: 1px solid var(--hairline-color);
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.18em];
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--hairline-color);
+    background: var(--soft-fill);
+    padding: 0.5rem 0.75rem;
+    font-family: theme("fontFamily.mono");
+    font-size: 11px;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: rgb(var(--c-ink-100));
+    transition: background 150ms ease, transform 100ms ease, border-color 150ms ease;
+  }
+  .btn:hover:not(:disabled) {
+    background: rgb(var(--c-ink-50) / 0.08);
+  }
+  .btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    border-color: rgb(var(--c-signal) / 0.40);
+    background: rgb(var(--c-signal) / 0.12);
+    color: rgb(var(--c-signal-glow));
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: rgb(var(--c-signal) / 0.22);
+  }
+
+  .btn-danger {
+    border-color: rgb(var(--c-status-unknown) / 0.40);
+    background: rgb(var(--c-status-unknown) / 0.10);
+    color: rgb(var(--c-status-unknown));
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: rgb(var(--c-status-unknown) / 0.20);
+  }
+
+  .field {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .input {
+    border-radius: 0.375rem;
+    border: 1px solid var(--hairline-color);
+    background: rgb(var(--c-ink-700) / 0.7);
+    padding: 0.5rem 0.75rem;
+    font-family: theme("fontFamily.mono");
+    font-size: 14px;
+    color: rgb(var(--c-ink-50));
+    outline: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .input:focus {
+    border-color: rgb(var(--c-signal) / 0.40);
+    box-shadow: 0 0 0 2px rgb(var(--c-signal) / 0.18);
+  }
+
+  /* Lane card scoreboard time digits */
+  .digit {
+    font-family: theme("fontFamily.mono");
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  /* Vertical scanline overlay used inside lane cards */
+  .scanlines {
+    background-image: linear-gradient(
+      transparent 0px,
+      transparent 2px,
+      var(--scanline-color) 3px,
+      transparent 4px
+    );
+    background-size: 100% 4px;
+  }
+
+  /* Watermark giant lane number behind each card */
+  .lane-watermark {
+    color: var(--watermark-color);
+  }
+
+  /* Time digit colorization driven by status, theme-aware */
+  .time-digit {
+    color: var(--time-color);
+  }
+  .time-digit.is-inactive {
+    color: var(--time-color-inactive);
+  }
+  .time-digit.is-running {
+    text-shadow: var(--time-shadow-running);
+  }
+  .time-digit.is-confirmed {
+    text-shadow: var(--time-shadow-confirmed);
+  }
+}

@@ -1,0 +1,19 @@
+# Rust
+/src-tauri/target
+/target
+
+# Node
+/node_modules
+/dist
+/.vite
+tsconfig.tsbuildinfo
+
+# Tauri
+/src-tauri/gen
+
+# Editor / OS
+.DS_Store
+*.log
+
+# Claude Code local settings
+.claude/settings.local.json
