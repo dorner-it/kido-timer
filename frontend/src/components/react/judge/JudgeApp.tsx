@@ -17,6 +17,12 @@ import {
   type JudgeContext,
 } from '../../../lib/decider';
 import {
+  countUnsentForAccess,
+  isInvalidAccessError,
+  isInvalidAccessStatus,
+  startJudgePolling,
+} from '../../../lib/judge-access';
+import {
   cancelEntry,
   chooseRun,
   reconcileFlow,
@@ -52,6 +58,7 @@ import {
   stationQueueItem,
   usePenaltyQueue,
   type DroppedSubmit,
+  type QueuedSubmit,
 } from '../../../lib/penalty-queue';
 import {
   STATION_KIND_LABELS,
@@ -60,6 +67,7 @@ import {
 } from '../../../lib/stations';
 import { Brandmark } from '../Brandmark';
 import { EntryDialog, ErrorPad } from './ErrorPad';
+import { InvalidAccessScreen } from './InvalidAccessScreen';
 import JudgeLogin from './JudgeLogin';
 import { LineupPanel } from './LineupPanel';
 import { SubmissionList } from './SubmissionList';
@@ -104,6 +112,13 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
   const [flashCode, setFlashCode] = useState<string | null>(null);
   const [local, setLocal] = useState<LocalSubmission[]>([]);
   const [tab, setTab] = useState<Tab>('fehler');
+  /** 401 on any judge request: link rotated/invalid → final screen. */
+  const [invalid, setInvalid] = useState(false);
+  const invalidRef = useRef(false);
+  const markInvalid = useCallback(() => {
+    invalidRef.current = true;
+    setInvalid(true);
+  }, []);
 
   const stationRef = useRef(session.station);
   stationRef.current = session.station;
@@ -124,27 +139,46 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
     void loadCatalogue();
   }, [loadCatalogue]);
 
-  const refresh = useCallback(async () => {
-    try {
-      const r = await apiClient.deciderStation.state(ownerSub, token, stationRef.current);
-      setState({ ...r, allowed_stations: pickerStations(r.allowed_stations, r.discipline?.mode) });
-      setError(null);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.status === 401) setError('Ungültiger Zugang. Bitte den QR-Code neu scannen.');
-        else if (err.status === 404) setError('Aktuell keine aktive Veranstaltung.');
-        else setError(err.message);
-      } else {
-        setError('Verbindung verloren – versuche es erneut …');
-      }
-    }
+  /** Loads the state; throws (401 included) for the caller to handle. */
+  const loadState = useCallback(async () => {
+    if (invalidRef.current) return;
+    const r = await apiClient.deciderStation.state(ownerSub, token, stationRef.current);
+    if (invalidRef.current) return;
+    setState({ ...r, allowed_stations: pickerStations(r.allowed_stations, r.discipline?.mode) });
+    setError(null);
+    // The link works → items once blocked by a 401 may be sent again.
+    penaltyQueue.unblock(ownerSub, token);
   }, [ownerSub, token]);
 
-  useEffect(() => {
-    void refresh();
-    const t = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(t);
-  }, [refresh]);
+  const showLoadError = useCallback((err: unknown) => {
+    if (err instanceof ApiError) {
+      if (err.status === 404) setError('Aktuell keine aktive Veranstaltung.');
+      else setError(err.message);
+    } else {
+      setError('Verbindung verloren – versuche es erneut …');
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    try {
+      await loadState();
+    } catch (err) {
+      if (isInvalidAccessError(err)) markInvalid();
+      else showLoadError(err);
+    }
+  }, [loadState, markInvalid, showLoadError]);
+
+  // Poll the state; a 401 stops polling for good (no retry loop).
+  useEffect(
+    () =>
+      startJudgePolling({
+        load: loadState,
+        intervalMs: POLL_MS,
+        onInvalid: markInvalid,
+        onError: showLoadError,
+      }),
+    [loadState, markInvalid, showLoadError],
+  );
 
   // Retry the catalogue together with the state poll until it loads.
   useEffect(() => {
@@ -211,9 +245,19 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
     setLocal((l) => l.filter((x) => x.client_id !== entry.client_id));
     setError(`„${entry.label}" wurde abgelehnt (${entry.reason}). Bitte erneut melden.`);
   }, []);
+  const handleUnauthorized = useCallback(
+    (entry: QueuedSubmit) => {
+      if (entry.owner_sub === ownerSub && entry.token === token) markInvalid();
+    },
+    [ownerSub, token, markInvalid],
+  );
   const queueOptions = useMemo(
-    () => ({ onConfirmed: handleConfirmed, onDropped: handleDropped }),
-    [handleConfirmed, handleDropped],
+    () => ({
+      onConfirmed: handleConfirmed,
+      onDropped: handleDropped,
+      onUnauthorized: handleUnauthorized,
+    }),
+    [handleConfirmed, handleDropped, handleUnauthorized],
   );
   const { items: queued, online, draining } = usePenaltyQueue(queueOptions);
 
@@ -305,6 +349,10 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
         );
         setError(null);
         void refresh();
+      } else if (isInvalidAccessStatus(result.status)) {
+        // Keep it (blocked) so it is counted on the "Zugang ungültig" screen.
+        penaltyQueue.block(item);
+        markInvalid();
       } else if (result.retriable) {
         penaltyQueue.enqueue(item);
         setNotice('Keine Verbindung – die Meldung wird automatisch nachgesendet.');
@@ -375,6 +423,10 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
       });
       setError(null);
     } catch (err) {
+      if (isInvalidAccessError(err)) {
+        markInvalid();
+        return;
+      }
       if (err instanceof ApiError && err.status === 409) {
         setError('Bereits von der Wettkampfleitung bearbeitet – nicht mehr zurückziehbar.');
       } else {
@@ -385,13 +437,19 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
   };
 
   const confirmLineup = async (runId: string, body: LineupRequestBody) => {
-    const run = await apiClient.deciderStation.setLineup(
-      ownerSub,
-      token,
-      runId,
-      body.runner_ids,
-      body.station,
-    );
+    let run;
+    try {
+      run = await apiClient.deciderStation.setLineup(
+        ownerSub,
+        token,
+        runId,
+        body.runner_ids,
+        body.station,
+      );
+    } catch (err) {
+      if (isInvalidAccessError(err)) markInvalid();
+      throw err;
+    }
     setState((s) =>
       s
         ? {
@@ -416,6 +474,15 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
   };
 
   // ----- render ----------------------------------------------------------------
+
+  if (invalid) {
+    return (
+      <InvalidAccessScreen
+        unsent={countUnsentForAccess(queued, ownerSub, token)}
+        onRetry={() => window.location.reload()}
+      />
+    );
+  }
 
   const loginStep = nextLoginStep(session, discipline);
   const hydrating = !!eventId && allowed.length > 0 && hydratedFor !== eventId;

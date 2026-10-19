@@ -77,6 +77,14 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+/**
+ * Options of every judge (`/api/decider/...`) request: a 401 there means
+ * "judge link invalid/rotated" — the judge app shows its own
+ * "Zugang ungültig" screen (`judge-access.ts`) instead of the organizer
+ * login redirect.
+ */
+const JUDGE: RequestOptions = { allowUnauthorized: true };
+
 let redirecting = false;
 function redirectToLogin() {
   if (typeof window === 'undefined' || redirecting) return;
@@ -762,7 +770,7 @@ export const apiClient = {
   },
   decider: {
     state: (owner_sub: string, slot: number, token: string) =>
-      request<DeciderState>(`/api/decider/${owner_sub}/${slot}/${token}/state`),
+      request<DeciderState>(`/api/decider/${owner_sub}/${slot}/${token}/state`, JUDGE),
     submit: (
       owner_sub: string,
       slot: number,
@@ -774,13 +782,14 @@ export const apiClient = {
       },
     ) =>
       request<Penalty>(`/api/decider/${owner_sub}/${slot}/${token}/penalties`, {
+        ...JUDGE,
         method: 'POST',
         body: JSON.stringify(input),
       }),
     withdraw: (owner_sub: string, slot: number, token: string, penalty_id: string) =>
       request<void>(
         `/api/decider/${owner_sub}/${slot}/${token}/penalties/${penalty_id}`,
-        { method: 'DELETE' },
+        { ...JUDGE, method: 'DELETE' },
       ),
   },
   // Station-token flow. Same shape as the slot flow, minus the slot
@@ -793,11 +802,13 @@ export const apiClient = {
           `/api/decider/${owner_sub}/${token}/state${
             station ? `?station=${encodeURIComponent(station)}` : ''
           }`,
+          JUDGE,
         ),
       ),
     submit: async (owner_sub: string, token: string, input: StationPenaltyInput) =>
       normalizePenalty(
         await request<unknown>(`/api/decider/${owner_sub}/${token}/penalties`, {
+          ...JUDGE,
           method: 'POST',
           body: JSON.stringify(stationPenaltyBody(input)),
         }),
@@ -811,7 +822,7 @@ export const apiClient = {
       const q = station ? `?station=${encodeURIComponent(station)}` : '';
       return request<void>(
         `/api/decider/${owner_sub}/${token}/penalties/${penalty_id}${q}`,
-        { method: 'DELETE' },
+        { ...JUDGE, method: 'DELETE' },
       );
     },
     /** Startlinie only; run must be one of `current_run_ids`. */
@@ -824,6 +835,7 @@ export const apiClient = {
     ) =>
       normalizeRun(
         await request<unknown>(`/api/decider/${owner_sub}/${token}/runs/${run_id}/lineup`, {
+          ...JUDGE,
           method: 'PUT',
           body: JSON.stringify(station ? { runner_ids, station } : { runner_ids }),
         }),
