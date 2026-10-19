@@ -60,8 +60,11 @@ pub struct RunInput {
     /// Run is finished (status `completed`). Pending/active/cancelled
     /// runs are passed with `false` and ignored.
     pub completed: bool,
-    /// Measured time incl. operator correction (original + correction),
-    /// or the hand-time mean. `None` = no time.
+    /// Measured time: the light-barrier time (`Run.original_time_ms`) or,
+    /// with `time_source = handstopp`, the hand-time mean stored there.
+    /// Never add `Run.correction_ms` (legacy display value = sum of
+    /// approved `delta_ms`; SZ are added by scoring itself). `None` = no
+    /// time.
     pub measured_ms: Option<u32>,
     pub penalties: Vec<PenaltyInput>,
     /// Runner ids who actually ran (from the Startlinie judge).
