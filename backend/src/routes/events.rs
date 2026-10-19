@@ -332,13 +332,17 @@ pub async fn set_current(
     Ok(Json(updated))
 }
 
+/// "Zugang erzeugen" / "Zugang neu erzeugen": new station link (also
+/// mints one for events created before the station token existed) and
+/// new legacy slot tokens.
 pub async fn rotate_decider_tokens(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Event>> {
     load_owned(&state, &auth, id).await?;
-    events::rotate_decider_tokens(&state.db, id, fresh_decider_tokens()).await?;
+    events::rotate_judge_tokens(&state.db, id, fresh_decider_tokens(), fresh_station_token())
+        .await?;
     let updated = events::get(&state.db, id)
         .await?
         .ok_or_else(|| AppError::Internal("event vanished mid-rotate".into()))?;

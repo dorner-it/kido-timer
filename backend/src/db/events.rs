@@ -277,10 +277,13 @@ pub async fn set_current(
     Ok(())
 }
 
-pub async fn rotate_decider_tokens(
+/// Replace all judge tokens at once: the 2027 `station_token` and the
+/// four legacy slot tokens (so old B1–B4 QR codes stop working too).
+pub async fn rotate_judge_tokens(
     client: &DbClient,
     event_id: Uuid,
     tokens: [String; 4],
+    station_token: String,
 ) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
     let av = AttributeValue::L(tokens.into_iter().map(AttributeValue::S).collect());
@@ -290,8 +293,9 @@ pub async fn rotate_decider_tokens(
         .table_name(&client.table_name)
         .key("PK", AttributeValue::S(keys::event_pk(event_id)))
         .key("SK", AttributeValue::S(keys::SK_META.to_string()))
-        .update_expression("SET decider_tokens = :t, updated_at = :u")
+        .update_expression("SET decider_tokens = :t, station_token = :s, updated_at = :u")
         .expression_attribute_values(":t", av)
+        .expression_attribute_values(":s", AttributeValue::S(station_token))
         .expression_attribute_values(":u", AttributeValue::S(now))
         .send()
         .await

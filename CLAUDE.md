@@ -341,7 +341,7 @@ User onboarding is **manual via the Cognito console or AWS CLI** (4 organizers m
 | DELETE | `/api/competitions/:id`                                     | Delete (cascades teams/runners)      |
 | POST   | `/api/competitions/:id/activate`                            | Mark active (deactivates others)     |
 | POST   | `/api/competitions/:id/current-run`                         | Set currently-running team           |
-| POST   | `/api/competitions/:id/decider-tokens/rotate`               | Regenerate all 4 slot tokens         |
+| POST   | `/api/events/:id/decider-tokens/rotate`                     | New station link + legacy slot tokens |
 | POST   | `/api/competitions/:id/teams`                               | Add team                             |
 | PUT    | `/api/competitions/:id/teams/:team_id`                      | Update team                          |
 | DELETE | `/api/competitions/:id/teams/:team_id`                      | Delete team                          |

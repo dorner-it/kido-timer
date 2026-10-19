@@ -584,7 +584,7 @@ function DisciplineForm({
 
 // ===== Deciders =====
 
-function DecidersPanel({
+export function DecidersPanel({
   data,
   onChange,
 }: {
@@ -600,15 +600,22 @@ function DecidersPanel({
     ? `${origin}/decider/${event.owner_sub}/${event.station_token}`
     : '';
 
+  /** New station link (also old slot links become invalid). No confirm
+   *  when there is no link yet. */
   const rotate = async () => {
     if (busy) return;
-    const ok = await confirm({
-      title: 'Decider-Codes neu generieren?',
-      message: 'Bisherige QR-Codes werden ungültig und müssen neu verteilt werden.',
-      confirmLabel: 'Neu generieren',
-      tone: 'danger',
-    });
-    if (!ok) return;
+    if (stationUrl) {
+      const ok = await confirm({
+        title: 'Strafrichter-Zugang neu erzeugen?',
+        message: [
+          'Der bisherige QR-Code wird sofort ungültig.',
+          'Alle Strafrichter müssen danach den neuen QR-Code scannen.',
+        ],
+        confirmLabel: 'Neu erzeugen',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       await apiClient.events.rotateDeciderTokens(event.id);
@@ -621,77 +628,50 @@ function DecidersPanel({
   return (
     <section className="flex flex-col gap-4">
       <p className="font-mono text-[12px] text-ink-200">
-        Vier QR-Codes — einer pro Strafrichter-Slot. Verteile sie am Ort und
-        rotiere bei Verlust.
+        Ein QR-Code für alle Strafrichter. Jeder wählt auf dem Handy seine Station
+        (und bei zwei Bahnen die Bahn).
       </p>
-      {stationUrl && (
-        <div className="surface flex flex-col gap-2 p-5">
-          <div className="flex items-baseline justify-between">
-            <span className="label">Strafrichter-Zugang (Stationen)</span>
-          </div>
-          <code className="block break-all rounded border border-[color:var(--hairline-color)] bg-[color:var(--soft-fill)] px-3 py-2 font-mono text-[11px] text-ink-100">
-            {stationUrl}
-          </code>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                void navigator.clipboard.writeText(stationUrl);
-              }}
-            >
-              Kopieren
-            </button>
-            <a href={stationUrl} target="_blank" rel="noreferrer" className="btn">
-              Öffnen
-            </a>
-            <QrIconButton title="Strafrichter-Zugang (Stationen)" url={stationUrl} />
-          </div>
-        </div>
-      )}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {event.decider_tokens.map((token, i) => {
-          const slot = i + 1;
-          const url = `${origin}/decider/${event.owner_sub}/${slot}/${token}`;
-          return (
-            <div key={slot} className="surface flex flex-col gap-2 p-5">
-              <div className="flex items-baseline justify-between">
-                <span className="label">Strafrichter</span>
-                <span className="font-stencil text-[28px] font-bold leading-none tracking-tight text-ink-50">
-                  B{slot}
-                </span>
-              </div>
-              <code className="block break-all rounded border border-[color:var(--hairline-color)] bg-[color:var(--soft-fill)] px-3 py-2 font-mono text-[11px] text-ink-100">
-                {url}
-              </code>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(url);
-                  }}
-                >
-                  Kopieren
-                </button>
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn"
-                >
-                  Öffnen
-                </a>
-                <QrIconButton title={`Strafrichter B${slot}`} url={url} />
-              </div>
+      <div className="surface flex flex-col gap-3 p-5">
+        <span className="label">Strafrichter-Zugang</span>
+        {stationUrl ? (
+          <>
+            <code className="block break-all rounded border border-[color:var(--hairline-color)] bg-[color:var(--soft-fill)] px-3 py-2 font-mono text-[11px] text-ink-100">
+              {stationUrl}
+            </code>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  void navigator.clipboard.writeText(stationUrl);
+                }}
+              >
+                Kopieren
+              </button>
+              <a href={stationUrl} target="_blank" rel="noreferrer" className="btn">
+                Öffnen
+              </a>
+              <QrIconButton title="Strafrichter-Zugang" url={stationUrl} />
+              <button
+                type="button"
+                className="btn btn-danger ml-auto"
+                onClick={rotate}
+                disabled={busy}
+              >
+                {busy ? 'Erzeuge …' : 'Zugang neu erzeugen'}
+              </button>
             </div>
-          );
-        })}
-      </div>
-      <div className="flex justify-end">
-        <button type="button" className="btn btn-danger" onClick={rotate} disabled={busy}>
-          {busy ? 'Rotiere …' : 'Codes neu generieren'}
-        </button>
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-[13px] text-ink-100">
+              Für diese Veranstaltung gibt es noch keinen Strafrichter-Zugang.
+            </span>
+            <button type="button" className="btn btn-primary" onClick={rotate} disabled={busy}>
+              {busy ? 'Erzeuge …' : 'Zugang erzeugen'}
+            </button>
+          </div>
+        )}
       </div>
       {dialog}
     </section>
