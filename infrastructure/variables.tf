@@ -18,7 +18,7 @@ variable "project" {
 variable "github_repo" {
   description = "GitHub repository in 'owner/name' form. Used in the OIDC trust policy."
   type        = string
-  default     = "dorner-it/ki-do-timer-web"
+  default     = "dorner-it/kido-timer"
 }
 
 variable "lambda_zip_path" {

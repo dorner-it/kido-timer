@@ -6,7 +6,7 @@ This file is the source of truth for Claude Code when working on this repository
 
 ## 1. Project Overview
 
-**Name:** KI-DO Timer Web (`ki-do-timer-web`)
+**Name:** KI-DO Timer (`kido-timer` monorepo: web backend, web frontend, desktop app)
 **Domain:** ki-do.it
 **Purpose:** Web application to prepare and operate **TRV Kocab timer** competitions for fire-department running disciplines (Löschangriff, Staffellauf, etc.).
 
@@ -56,8 +56,9 @@ The web app does **not** talk to the timer hardware directly. It is responsible 
 Scaffold the project as a monorepo:
 
 ```
-ki-do-timer-web/
+kido-timer/
 ├── CLAUDE.md                  # This file
+├── desktop/                   # Tauri 2 desktop app (serial timer console), imported from kido-timer-app
 ├── README.md                  # Quickstart for humans
 ├── .gitignore
 ├── .editorconfig
@@ -534,7 +535,7 @@ When invoked in an empty directory with this file present:
 - **Penalty granularity:** penalties attach to a `Run` row (a team running multiple heats has separate penalty buckets). Run mirrors the desktop app's `RunEntry` (`originalTimeMs` + `correctionMs`).
 - **AWS account & infra:** same account as `../fms/` (eu-central-1, state bucket `dorner-it-fms-terraform-state`, lock table `fms-terraform-locks`).
 - **CI:** Terraform plan/apply runs from GitHub Actions via OIDC. Lambda deploy runs from GitHub Actions on `backend/**` changes.
-- **GitHub repo:** `dorner-it/ki-do-timer-web`.
+- **GitHub repo:** `dorner-it/kido-timer` (public monorepo since 2026-10-16; merged from `dorner-it/ki-do-timer-web` + `dorner-it/kido-timer-app`, both histories preserved). Desktop releases are tagged `desktop-vX.Y.Z` and published here; the Tauri updater reads `releases/latest/download/latest.json` of this repo.
 
 ### Still open
 

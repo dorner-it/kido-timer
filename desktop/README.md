@@ -22,7 +22,7 @@ The app is a single self-contained Windows executable. There are no network depe
 ## Project layout
 
 ```
-kido-timer-app/
+desktop/   (inside the kido-timer monorepo)
 ├── src/                 # React frontend (Vite + TS + Tailwind)
 │   ├── components/      # TopBar, LaneGrid, LaneCard, ConnectionPanel, ActionPanel, RunHistory, ErrorBanner
 │   ├── lib/             # Tauri bindings, types, useConnection hook, dev simulator
