@@ -2,29 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import {
-  ApiError,
-  apiClient,
-  type CatalogueEntry,
-  type Run,
-  type Runner,
-  type StationKind,
-  type Team,
-  type TimerMode,
-} from '../../lib/api';
-import {
-  catalogueEntryLabel,
-  catalogueSubmitBody,
-  currentRunLabel,
-  legacySubmitBody,
-  resolveSubmitTarget,
-} from '../../lib/decider';
-import {
-  PENALTY_KIND_LABELS,
-  PENALTY_KIND_SHORT,
-  catalogueForStation,
-} from '../../lib/penalties';
-import { STATION_KIND_LABELS, pickerStations } from '../../lib/stations';
+import { ApiError, apiClient, type Run, type Runner, type Team } from '../../lib/api';
 import {
   PRESETS_BY_MODE,
   reasonsForMode,
@@ -39,41 +17,25 @@ import {
   penaltyQueue,
   usePenaltyQueue,
   type DroppedSubmit,
+  type QueuedSlotSubmit,
 } from '../../lib/penalty-queue';
+import type { TimerMode } from '../../lib/api';
 import { Brandmark } from './Brandmark';
-import StationPicker, {
-  clearStation,
-  loadStation,
-  saveStation,
-} from './StationPicker';
 
 /**
- * The pad runs in two modes:
+ * Legacy slot pad — route `/decider/:owner/:slot/:token`. The slot *is*
+ * the identity; penalties are time presets (pre-2027). Kept so QR codes
+ * minted before the stations feature keep working.
  *
- * - **slot** — legacy route `/decider/:owner/:slot/:token`. The slot
- *   *is* the identity; no station picker is shown. Kept so QR codes
- *   minted before the stations feature keep working.
- *
- * - **station** — new route `/decider/:owner/:token`. The decider
- *   picks a station once (persisted to localStorage). With the 2027
- *   backend every penalty is a catalogue code of that station (SZ/FV);
- *   if no catalogue is available (older backend) the legacy time
- *   presets + DQ button are shown instead.
+ * The 2027 station flow (catalogue SZ/FV, lane choice, lineup) lives in
+ * `judge/JudgeApp.tsx` (route `/decider/:owner/:token`).
  */
-export type DeciderPadProps =
-  | {
-      ownerSub: string;
-      /** Astro reserves the bare `slot` prop name. */
-      slotIndex: string;
-      token: string;
-      stationToken?: never;
-    }
-  | {
-      ownerSub: string;
-      stationToken: string;
-      slotIndex?: never;
-      token?: never;
-    };
+export interface DeciderPadProps {
+  ownerSub: string;
+  /** Astro reserves the bare `slot` prop name. */
+  slotIndex: string;
+  token: string;
+}
 
 const FLASH_MS = 700;
 
@@ -84,28 +46,15 @@ interface ConfirmedSubmission {
   at: number;
 }
 
-interface CurrentRunView {
-  run: Run;
-  team: Team;
-  runner?: Runner | null;
-}
-
 interface CommonState {
   event: { id: string; name: string; date: string; location: string | null };
   discipline: { id: string; name: string; mode: TimerMode } | null;
-  /** `current_runs[0]`, kept for the single-run UI. */
-  current_run: CurrentRunView | null;
-  /** All current runs (one per active lane), ordered by lane. */
-  current_runs: CurrentRunView[];
+  current_run: { run: Run; team: Team; runner?: Runner | null } | null;
   disabled: boolean;
-  /** Only populated in station mode (already normalized + filtered by mode). */
-  allowed_stations?: StationKind[];
 }
 
-export default function DeciderPad(props: DeciderPadProps) {
-  const isStation = 'stationToken' in props && !!props.stationToken;
-  const ownerSub = props.ownerSub;
-  const slotNumber = !isStation ? Number((props as { slotIndex: string }).slotIndex) : null;
+export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadProps) {
+  const slotNumber = Number(slotIndex);
 
   const [state, setState] = useState<CommonState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -113,73 +62,22 @@ export default function DeciderPad(props: DeciderPadProps) {
   const [busy, setBusy] = useState(false);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
-  const [station, setStation] = useState<StationKind | null>(null);
-  const [catalogue, setCatalogue] = useState<CatalogueEntry[] | null>(null);
 
-  const presets =
-    state && state.discipline ? PRESETS_BY_MODE[state.discipline.mode] : [];
+  const presets = state && state.discipline ? PRESETS_BY_MODE[state.discipline.mode] : [];
+  const hasRun = !!state?.current_run;
 
-  // Station mode: load the static error catalogue once. On failure
-  // (older backend without /api/catalogue) we keep `[]` and fall back
-  // to the legacy time presets.
-  useEffect(() => {
-    if (!isStation) return;
-    let cancelled = false;
-    apiClient.catalogue
-      .list()
-      .then((c) => {
-        if (!cancelled) setCatalogue(c);
-      })
-      .catch(() => {
-        if (!cancelled) setCatalogue([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isStation]);
-
-  const stationEntries = useMemo(
-    () => catalogueForStation(catalogue, station),
-    [catalogue, station],
-  );
-  // TODO(PR 2): full catalogue UI (grouping, confirmation, lineup at
-  // Startlinie). For now a plain button per catalogue entry.
-  const useCatalogue = isStation && stationEntries.length > 0;
-  const submitTarget = resolveSubmitTarget(state?.current_runs ?? []);
-
-  // Hydrate the persisted station selection on first render (and any
-  // time the event id changes — moving between events on the same
-  // device starts the picker fresh).
-  useEffect(() => {
-    if (!isStation || !state?.event.id) return;
-    const allowed = state.allowed_stations ?? [];
-    if (allowed.length === 0) return;
-    const found = loadStation(state.event.id, allowed);
-    setStation(found);
-  }, [isStation, state?.event.id, state?.allowed_stations]);
-
-  const handleConfirmed = useCallback(
-    (entry: { client_id: string; id: string }) => {
-      setConfirmed((c) => {
-        if (c.some((x) => x.client_id === entry.client_id)) return c;
-        return [
-          {
-            id: entry.id,
-            client_id: entry.client_id,
-            label: 'Strafe gesendet',
-            at: Date.now(),
-          },
-          ...c,
-        ].slice(0, 8);
-      });
-    },
-    [],
-  );
+  const handleConfirmed = useCallback((entry: { client_id: string; id: string }) => {
+    setConfirmed((c) => {
+      if (c.some((x) => x.client_id === entry.client_id)) return c;
+      return [
+        { id: entry.id, client_id: entry.client_id, label: 'Strafe gesendet', at: Date.now() },
+        ...c,
+      ].slice(0, 8);
+    });
+  }, []);
 
   const handleDropped = useCallback((entry: DroppedSubmit) => {
-    setError(
-      `Strafe „${entry.label}" wurde verworfen (${entry.reason}). Bitte nochmal eingeben.`,
-    );
+    setError(`Strafe „${entry.label}" wurde verworfen (${entry.reason}). Bitte nochmal eingeben.`);
   }, []);
 
   const queueOptions = useMemo(
@@ -190,34 +88,13 @@ export default function DeciderPad(props: DeciderPadProps) {
 
   const refresh = useCallback(async () => {
     try {
-      if (isStation) {
-        const r = await apiClient.deciderStation.state(
-          ownerSub,
-          (props as { stationToken: string }).stationToken,
-        );
-        setState({
-          event: r.event,
-          discipline: r.discipline,
-          current_run: r.current_runs[0] ?? null,
-          current_runs: r.current_runs,
-          disabled: r.disabled,
-          allowed_stations: pickerStations(r.allowed_stations, r.discipline?.mode),
-        });
-      } else {
-        const slot = Number((props as { slotIndex: string }).slotIndex);
-        const r = await apiClient.decider.state(
-          ownerSub,
-          slot,
-          (props as { token: string }).token,
-        );
-        setState({
-          event: r.event,
-          discipline: r.discipline,
-          current_run: r.current_run,
-          current_runs: r.current_run ? [r.current_run] : [],
-          disabled: r.disabled,
-        });
-      }
+      const r = await apiClient.decider.state(ownerSub, slotNumber, token);
+      setState({
+        event: r.event,
+        discipline: r.discipline,
+        current_run: r.current_run,
+        disabled: r.disabled,
+      });
       setError(null);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -228,8 +105,7 @@ export default function DeciderPad(props: DeciderPadProps) {
         setError('Verbindung verloren. Neu versuchen …');
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStation, ownerSub]);
+  }, [ownerSub, slotNumber, token]);
 
   useEffect(() => {
     refresh();
@@ -237,120 +113,53 @@ export default function DeciderPad(props: DeciderPadProps) {
     return () => window.clearInterval(t);
   }, [refresh]);
 
-  const submit = async (
-    flash: string,
-    label: string,
-    deltaMs: number,
-    reason: string | null,
-    opts: { dq?: boolean; code?: string } = {},
-  ) => {
+  const submit = async (flash: string, label: string, deltaMs: number, reason: string | null) => {
     if (busy) return;
-    // TODO(PR 2 – Bahnauswahl): pass the judge's selected run here once
-    // multiple parallel runs can be targeted (see resolveSubmitTarget).
-    const target = resolveSubmitTarget(state?.current_runs ?? []);
-    if (!target.ok) {
-      setError(target.message);
-      return;
-    }
-    if (isStation && !station) {
-      setError('Bitte zuerst eine Station wählen.');
+    if (!hasRun) {
+      setError('Aktuell läuft kein Lauf.');
       return;
     }
     setBusy(true);
-
     setFlashKey(flash);
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate(50);
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(50);
+      }
+    } catch {
+      // not supported
     }
     window.setTimeout(() => setFlashKey((k) => (k === flash ? null : k)), FLASH_MS);
 
     const cid = clientId();
     try {
-      let result: { ok: true; id: string } | { ok: false; retriable: boolean; status: number | null; message: string };
-      if (isStation) {
-        // Station flow bypasses the queue-store (which is slot-typed)
-        // and posts directly. Offline retry is best-effort: if this
-        // throws, the operator re-taps after reconnection.
-        try {
-          const body = opts.code
-            ? catalogueSubmitBody(station!, { code: opts.code }, target.run_id, cid)
-            : legacySubmitBody(
-                station!,
-                { deltaMs, reasonCode: reason, dq: opts.dq },
-                target.run_id,
-                cid,
-              );
-          const created = await apiClient.deciderStation.submit(
-            ownerSub,
-            (props as { stationToken: string }).stationToken,
-            body,
-          );
-          result = { ok: true, id: created.id };
-        } catch (e) {
-          if (e instanceof ApiError) {
-            result = {
-              ok: false,
-              retriable: e.status >= 500,
-              status: e.status,
-              message: e.message,
-            };
-          } else {
-            result = {
-              ok: false,
-              retriable: true,
-              status: null,
-              message: e instanceof Error ? e.message : 'Netzwerkfehler',
-            };
-          }
-        }
-      } else {
-        const queueItem = {
-          client_id: cid,
-          owner_sub: ownerSub,
-          slot: slotNumber!,
-          token: (props as { token: string }).token,
-          delta_ms: deltaMs,
-          reason_code: reason,
-          label,
-          queued_at: Date.now(),
-        };
-        result = await attemptSubmit(queueItem);
-        if (!result.ok && result.retriable) {
-          penaltyQueue.enqueue(queueItem);
-        }
-      }
+      const queueItem: QueuedSlotSubmit = {
+        client_id: cid,
+        owner_sub: ownerSub,
+        slot: slotNumber,
+        token,
+        delta_ms: deltaMs,
+        reason_code: reason,
+        label,
+        queued_at: Date.now(),
+      };
+      const result = await attemptSubmit(queueItem);
+      if (!result.ok && result.retriable) penaltyQueue.enqueue(queueItem);
 
       if (result.ok) {
         setConfirmed((c) =>
-          [
-            { id: result.id, client_id: cid, label, at: Date.now() },
-            ...c,
-          ].slice(0, 8),
+          [{ id: result.id, client_id: cid, label, at: Date.now() }, ...c].slice(0, 8),
         );
         setError(null);
       } else if (!result.retriable) {
-        if (!isStation) {
-          droppedLog.push({
-            client_id: cid,
-            owner_sub: ownerSub,
-            slot: slotNumber!,
-            token: (props as { token: string }).token,
-            delta_ms: deltaMs,
-            reason_code: reason,
-            label,
-            queued_at: Date.now(),
-            dropped_at: Date.now(),
-            reason: result.message,
-            http_status: result.status,
-          });
-        }
+        droppedLog.push({
+          ...queueItem,
+          dropped_at: Date.now(),
+          reason: result.message,
+          http_status: result.status,
+        });
         setError(`Strafe abgelehnt (${result.message}). Bitte nochmal eingeben.`);
       } else {
-        setError(
-          isStation
-            ? `Netzwerkfehler — bitte erneut tippen.`
-            : `Sendung gepuffert (${result.message}).`,
-        );
+        setError(`Sendung gepuffert (${result.message}).`);
       }
     } finally {
       setBusy(false);
@@ -363,51 +172,12 @@ export default function DeciderPad(props: DeciderPadProps) {
       return;
     }
     try {
-      if (isStation) {
-        await apiClient.deciderStation.withdraw(
-          ownerSub,
-          (props as { stationToken: string }).stationToken,
-          target.id,
-          station,
-        );
-      } else {
-        await apiClient.decider.withdraw(
-          ownerSub,
-          slotNumber!,
-          (props as { token: string }).token,
-          target.id,
-        );
-      }
+      await apiClient.decider.withdraw(ownerSub, slotNumber, token, target.id);
       setConfirmed((c) => c.filter((x) => x.client_id !== target.client_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Zurückziehen fehlgeschlagen');
     }
   };
-
-  // ------------------- station picker gating (station mode only) -------
-  const showStationPicker =
-    isStation && state && !station && (state.allowed_stations ?? []).length > 0;
-
-  const changeStation = () => {
-    if (!state?.event.id || !isStation) return;
-    if (window.confirm('Station wechseln? Bisherige Auswahl wird verworfen.')) {
-      clearStation(state.event.id);
-      setStation(null);
-    }
-  };
-
-  if (showStationPicker && state) {
-    return (
-      <StationPicker
-        eventId={state.event.id}
-        allowed={state.allowed_stations ?? []}
-        onPicked={(s) => {
-          saveStation(state.event.id, s);
-          setStation(s);
-        }}
-      />
-    );
-  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -428,27 +198,10 @@ export default function DeciderPad(props: DeciderPadProps) {
         </div>
         <ConnectivityPill online={online} pending={queued.length} draining={draining} />
         <div className="flex flex-col items-end leading-tight">
-          {isStation ? (
-            <>
-              <span className="font-stencil text-[20px] font-bold text-signal-glow leading-none">
-                {station ? STATION_KIND_LABELS[station] : '—'}
-              </span>
-              <button
-                type="button"
-                className="label underline-offset-2 hover:underline"
-                onClick={changeStation}
-              >
-                Station ändern
-              </button>
-            </>
-          ) : (
-            <>
-              <span className="font-stencil text-[28px] font-bold text-signal-glow leading-none tnum">
-                B{slotNumber}
-              </span>
-              <span className="label">Slot</span>
-            </>
-          )}
+          <span className="font-stencil text-[28px] font-bold text-signal-glow leading-none tnum">
+            B{slotNumber}
+          </span>
+          <span className="label">Slot</span>
         </div>
       </header>
 
@@ -471,10 +224,6 @@ export default function DeciderPad(props: DeciderPadProps) {
               übernommen.
             </p>
           </div>
-        ) : state && state.current_runs.length > 1 ? (
-          // TODO(PR 2 – Bahnauswahl): make these cards selectable (or
-          // filter to the judge's own lane for per_station_and_lane).
-          <MultiRunBanner runs={state.current_runs} />
         ) : state?.current_run ? (
           <CurrentRunBanner
             teamName={state.current_run.team.name}
@@ -496,28 +245,7 @@ export default function DeciderPad(props: DeciderPadProps) {
           </div>
         )}
 
-        {state && !state.disabled && useCatalogue && (
-          <section className="mt-8">
-            <span className="label">Fehler melden · {station ? STATION_KIND_LABELS[station] : ''}</span>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 stagger-rise">
-              {stationEntries.map((entry) => (
-                <CatalogueButton
-                  key={entry.code}
-                  entry={entry}
-                  disabled={!submitTarget.ok || busy}
-                  flashing={flashKey === entry.code}
-                  onClick={() =>
-                    submit(entry.code, catalogueEntryLabel(entry), 0, null, {
-                      code: entry.code,
-                    })
-                  }
-                />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {state && !state.disabled && !useCatalogue && (
+        {state && !state.disabled && (
           <section className="mt-8">
             <span className="label">Strafen senden</span>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 stagger-rise">
@@ -525,16 +253,14 @@ export default function DeciderPad(props: DeciderPadProps) {
                 <PresetButton
                   key={p.reason_code}
                   preset={p}
-                  disabled={!submitTarget.ok || busy}
+                  disabled={!hasRun || busy}
                   flashing={flashKey === p.reason_code}
-                  onClick={() =>
-                    submit(p.reason_code, p.reason_label, p.delta_ms, p.reason_code)
-                  }
+                  onClick={() => submit(p.reason_code, p.reason_label, p.delta_ms, p.reason_code)}
                 />
               ))}
               <button
                 type="button"
-                disabled={!submitTarget.ok || busy}
+                disabled={!hasRun || busy}
                 onClick={() => setCustomOpen((v) => !v)}
                 className={`surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40 border-dashed ${
                   customOpen ? 'ring-2 ring-signal/60' : ''
@@ -547,37 +273,13 @@ export default function DeciderPad(props: DeciderPadProps) {
               </button>
             </div>
 
-            {/* DQ button — station mode only, only when the active
-                discipline is on a DQ-capable mode (i.e. Löschangriff
-                and Staffel; single_lane/individual currently mirror
-                the same rule but the data is the source of truth). */}
-            {isStation && state.discipline && isDqAllowed(state.discipline.mode) && (
-              <div className="mt-4 flex justify-center">
-                <button
-                  type="button"
-                  disabled={!submitTarget.ok || busy || !station}
-                  onClick={() =>
-                    submit('dq', 'Disqualifikation', 0, 'dsq', { dq: true })
-                  }
-                  className="btn btn-danger px-8 py-4 font-stencil text-[18px]"
-                >
-                  Disqualifikation melden
-                </button>
-              </div>
-            )}
-
             {customOpen && state.discipline && (
               <CustomPenaltyForm
                 mode={state.discipline.mode}
-                disabled={!submitTarget.ok || busy}
+                disabled={!hasRun || busy}
                 flashing={flashKey === 'custom'}
                 onSubmit={async (seconds, reasonCode) => {
-                  await submit(
-                    'custom',
-                    `+ ${seconds} s`,
-                    Math.round(seconds * 1000),
-                    reasonCode,
-                  );
+                  await submit('custom', `+ ${seconds} s`, Math.round(seconds * 1000), reasonCode);
                 }}
               />
             )}
@@ -588,16 +290,11 @@ export default function DeciderPad(props: DeciderPadProps) {
           <section className="mt-10">
             <span className="label">Eigene Eingaben</span>
             {queued.length === 0 && confirmed.length === 0 ? (
-              <p className="mt-2 font-mono text-[12px] text-ink-200">
-                Noch nichts gesendet.
-              </p>
+              <p className="mt-2 font-mono text-[12px] text-ink-200">Noch nichts gesendet.</p>
             ) : (
               <ul className="mt-3 flex flex-col divide-y divide-[color:var(--hairline-color)]">
                 {queued.map((q) => (
-                  <li
-                    key={q.client_id}
-                    className="flex items-center justify-between gap-3 py-3"
-                  >
+                  <li key={q.client_id} className="flex items-center justify-between gap-3 py-3">
                     <span className="flex items-center gap-2 font-display text-[15px] text-status-armed">
                       <span className="h-1.5 w-1.5 rounded-full bg-status-armed animate-pulse" />
                       {q.label}
@@ -613,13 +310,8 @@ export default function DeciderPad(props: DeciderPadProps) {
                   </li>
                 ))}
                 {confirmed.map((r) => (
-                  <li
-                    key={r.client_id}
-                    className="flex items-center justify-between gap-3 py-3"
-                  >
-                    <span className="font-display text-[15px] text-ink-50">
-                      {r.label}
-                    </span>
+                  <li key={r.client_id} className="flex items-center justify-between gap-3 py-3">
+                    <span className="font-display text-[15px] text-ink-50">{r.label}</span>
                     <span className="label">{relativeTime(r.at)}</span>
                     <button
                       type="button"
@@ -637,14 +329,6 @@ export default function DeciderPad(props: DeciderPadProps) {
       </main>
     </div>
   );
-}
-
-/** Which modes allow a dedicated DQ submission. All four currently do
- *  — the rule is "discipline declares disqualifications meaningful"
- *  not "mode declares it", so we accept everything for now. Easy to
- *  tighten once the discipline-mode mapping is finalised. */
-function isDqAllowed(_mode: TimerMode): boolean {
-  return true;
 }
 
 function CurrentRunBanner(props: {
@@ -684,85 +368,6 @@ function CurrentRunBanner(props: {
       </div>
       <div className="scanlines pointer-events-none absolute inset-0 opacity-50" />
     </div>
-  );
-}
-
-/** Parallel runs (one per lane). Display only for now. */
-function MultiRunBanner({ runs }: { runs: CurrentRunView[] }) {
-  return (
-    <div className="surface relative overflow-hidden p-5 animate-rise">
-      <span className="label">{runs.length} Läufe gleichzeitig</span>
-      <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {runs.map((cr) => (
-          <li
-            key={cr.run.id}
-            className="flex items-center gap-3 rounded border border-[color:var(--hairline-color)] px-4 py-3"
-          >
-            <span className="font-stencil text-[32px] font-bold leading-none text-signal-glow tnum">
-              {cr.run.lane ?? '–'}
-            </span>
-            <div className="flex flex-col">
-              <span className="label">
-                {cr.run.lane != null ? `Bahn ${cr.run.lane}` : 'Ohne Bahn'} · Lauf{' '}
-                {cr.run.run_number}
-              </span>
-              <span className="font-display text-[18px] font-semibold leading-tight text-ink-50">
-                {cr.team.name}
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="mt-3 font-mono text-[11px] text-status-armed">
-        {runs.map(currentRunLabel).join(' / ')} — Fehler können erst gemeldet
-        werden, wenn nur ein Lauf aktiv ist (Bahnauswahl folgt).
-      </p>
-    </div>
-  );
-}
-
-function CatalogueButton({
-  entry,
-  disabled,
-  flashing,
-  onClick,
-}: {
-  entry: CatalogueEntry;
-  disabled: boolean;
-  flashing: boolean;
-  onClick: () => void;
-}) {
-  const kindCls =
-    entry.kind === 'fv'
-      ? 'border-status-unknown/60 bg-status-unknown/10 hover:bg-status-unknown/20'
-      : '';
-  const flashCls = flashing
-    ? 'ring-2 ring-status-confirmed bg-status-confirmed/15 scale-[0.98]'
-    : '';
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      title={PENALTY_KIND_LABELS[entry.kind]}
-      className={`surface flex items-center gap-3 px-4 py-4 text-left transition active:scale-[0.97] disabled:opacity-40 ${kindCls} ${flashCls}`}
-    >
-      <span
-        className={`pill shrink-0 ${
-          entry.kind === 'fv'
-            ? 'bg-status-unknown/15 text-status-unknown'
-            : 'bg-status-armed/15 text-status-armed'
-        }`}
-      >
-        {PENALTY_KIND_SHORT[entry.kind]}
-        <span className="font-mono text-[10px] opacity-80">
-          {entry.kind === 'sz' ? '+15 s' : 'ungültig'}
-        </span>
-      </span>
-      <span className="font-display text-[14px] leading-snug text-ink-50">
-        {entry.label_de}
-      </span>
-    </button>
   );
 }
 

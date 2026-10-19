@@ -220,6 +220,7 @@ export function normalizeStationState(raw: unknown): StationDeciderState {
     current_run: list[0] ?? null,
     disabled: Boolean(s.disabled),
     allowed_stations: normalizeStations(s.allowed_stations),
+    penalties: Array.isArray(s.penalties) ? s.penalties.map(normalizePenalty) : undefined,
   } as StationDeciderState;
 }
 

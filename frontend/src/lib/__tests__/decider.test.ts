@@ -15,7 +15,7 @@ const cr = (id: string, lane: number | null, name: string) => ({
   team: { name },
 });
 
-describe('resolveSubmitTarget', () => {
+describe('resolveSubmitTarget (basic, no judge context)', () => {
   it('no run → error', () => {
     const t = resolveSubmitTarget([]);
     expect(t.ok).toBe(false);
@@ -26,13 +26,18 @@ describe('resolveSubmitTarget', () => {
   });
 
   it('single run → its id', () => {
-    expect(resolveSubmitTarget([cr('run1', 1, 'A')])).toEqual({ ok: true, run_id: 'run1' });
+    const t = resolveSubmitTarget([cr('run1', 1, 'A')]);
+    expect(t.ok).toBe(true);
+    if (t.ok) expect(t.run_id).toBe('run1');
   });
 
-  it('multiple runs → refused until the lane selection exists', () => {
+  it('multiple runs → the judge must choose (no more refusal)', () => {
     const t = resolveSubmitTarget([cr('run1', 1, 'A'), cr('run2', 2, 'B')]);
     expect(t.ok).toBe(false);
-    if (!t.ok) expect(t.reason).toBe('multiple_runs');
+    if (!t.ok) {
+      expect(t.reason).toBe('choose_run');
+      expect(t.options.map((o) => o.run.id)).toEqual(['run1', 'run2']);
+    }
   });
 });
 

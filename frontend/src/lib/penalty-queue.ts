@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
-import { ApiError, apiClient } from './api';
+import { ApiError, apiClient, type StationPenaltyInput } from './api';
+import { uuidV4 } from './uuid';
 
 /**
  * Local persistence + retry for decider-pad penalty submissions.
@@ -29,7 +30,9 @@ import { ApiError, apiClient } from './api';
 const STORAGE_KEY = 'kido_penalty_queue_v1';
 const DROPPED_KEY = 'kido_penalty_dropped_v1';
 
-export interface QueuedSubmit {
+/** Legacy slot-token submit. Items stored before PR 2 have no `flow`. */
+export interface QueuedSlotSubmit {
+  flow?: 'slot';
   client_id: string;
   owner_sub: string;
   slot: number;
@@ -41,10 +44,49 @@ export interface QueuedSubmit {
   queued_at: number;
 }
 
-export interface DroppedSubmit extends QueuedSubmit {
+/** Station-token submit (2027 catalogue code, PR 2). */
+export interface QueuedStationSubmit {
+  flow: 'station';
+  client_id: string;
+  owner_sub: string;
+  token: string;
+  /** Full body; `client_id` inside equals the item's `client_id`. */
+  body: StationPenaltyInput;
+  label: string;
+  queued_at: number;
+}
+
+export type QueuedSubmit = QueuedSlotSubmit | QueuedStationSubmit;
+
+export type DroppedSubmit = QueuedSubmit & {
   dropped_at: number;
   reason: string;
   http_status: number | null;
+};
+
+export function isStationSubmit(item: QueuedSubmit): item is QueuedStationSubmit {
+  return item.flow === 'station';
+}
+
+/** Builds a station queue item; the body always carries the client id
+ *  so retries upsert the same penalty server-side. */
+export function stationQueueItem(opts: {
+  owner_sub: string;
+  token: string;
+  body: StationPenaltyInput;
+  label: string;
+  client_id: string;
+  now?: number;
+}): QueuedStationSubmit {
+  return {
+    flow: 'station',
+    client_id: opts.client_id,
+    owner_sub: opts.owner_sub,
+    token: opts.token,
+    body: { ...opts.body, client_id: opts.client_id },
+    label: opts.label,
+    queued_at: opts.now ?? Date.now(),
+  };
 }
 
 type Listener = () => void;
@@ -54,7 +96,8 @@ function read<T>(key: string): T[] {
   if (typeof localStorage === 'undefined') return [];
   try {
     const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T[]) : [];
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
   } catch {
     return [];
   }
@@ -62,7 +105,11 @@ function read<T>(key: string): T[] {
 
 function write<T>(key: string, items: T[]): void {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(key, JSON.stringify(items));
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch {
+    // quota exceeded / storage blocked: keep going, listeners still fire
+  }
   listeners.forEach((fn) => fn());
 }
 
@@ -120,40 +167,49 @@ export interface SubmitFail {
 }
 export type SubmitResult = SubmitOk | SubmitFail;
 
+/** Error → queue decision: HTTP 5xx / 408 / 429 and network errors are
+ *  retriable, other 4xx are final. */
+export function classifySubmitError(err: unknown): SubmitFail {
+  if (err instanceof ApiError) {
+    const retriable = err.status >= 500 || err.status === 408 || err.status === 429;
+    return { ok: false, retriable, status: err.status, message: err.message };
+  }
+  return {
+    ok: false,
+    retriable: true,
+    status: null,
+    message: err instanceof Error ? err.message : 'Netzwerkfehler',
+  };
+}
+
+export type SubmitSender = (item: QueuedSubmit) => Promise<{ id: string }>;
+
+/** Default transport: slot route or station route depending on the item. */
+export const defaultSender: SubmitSender = (item) => {
+  if (isStationSubmit(item)) {
+    return apiClient.deciderStation.submit(item.owner_sub, item.token, item.body);
+  }
+  return apiClient.decider.submit(item.owner_sub, item.slot, item.token, {
+    delta_ms: item.delta_ms,
+    reason_code: item.reason_code,
+    client_id: item.client_id,
+  });
+};
+
 /**
  * Send one queued item to the API and translate the outcome into a
  * decision tree the queue can act on. Network errors → retriable;
  * 4xx → drop; 5xx → retriable.
  */
-export async function attemptSubmit(item: QueuedSubmit): Promise<SubmitResult> {
+export async function attemptSubmit(
+  item: QueuedSubmit,
+  send: SubmitSender = defaultSender,
+): Promise<SubmitResult> {
   try {
-    const created = await apiClient.decider.submit(
-      item.owner_sub,
-      item.slot,
-      item.token,
-      {
-        delta_ms: item.delta_ms,
-        reason_code: item.reason_code,
-        client_id: item.client_id,
-      },
-    );
+    const created = await send(item);
     return { ok: true, id: created.id };
   } catch (err) {
-    if (err instanceof ApiError) {
-      const retriable = err.status >= 500;
-      return {
-        ok: false,
-        retriable,
-        status: err.status,
-        message: err.message,
-      };
-    }
-    return {
-      ok: false,
-      retriable: true,
-      status: null,
-      message: err instanceof Error ? err.message : 'Netzwerkfehler',
-    };
+    return classifySubmitError(err);
   }
 }
 
@@ -209,13 +265,18 @@ export function usePenaltyQueue(options?: {
   onConfirmed?: (entry: { client_id: string; id: string }) => void;
   onDropped?: (entry: DroppedSubmit) => void;
 }) {
-  const [items, setItems] = useState<QueuedSubmit[]>(() => penaltyQueue.list());
-  const [online, setOnline] = useState(() =>
-    typeof navigator === 'undefined' ? true : navigator.onLine,
-  );
+  // Initial values must match the server render (SSR has neither
+  // localStorage nor a meaningful navigator.onLine) — the real values
+  // are read in the effect right after hydration.
+  const [items, setItems] = useState<QueuedSubmit[]>([]);
+  const [online, setOnline] = useState(true);
   const [draining, setDraining] = useState(false);
 
   useEffect(() => {
+    setItems(penaltyQueue.list());
+    if (typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean') {
+      setOnline(navigator.onLine);
+    }
     const sub = penaltyQueue.subscribe(() => setItems(penaltyQueue.list()));
     const onOnline = () => {
       setOnline(true);
@@ -235,7 +296,7 @@ export function usePenaltyQueue(options?: {
     const drain = async () => {
       if (cancelled) return;
       if (penaltyQueue.size() === 0) return;
-      if (!navigator.onLine) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
       setDraining(true);
       try {
         const res = await drainOnce();
@@ -259,15 +320,7 @@ export function usePenaltyQueue(options?: {
   return { items, online, draining };
 }
 
-/** Browser UUID v4 with a fallback for non-crypto environments. */
+/** UUID v4; works outside secure contexts (on-prem over plain HTTP). */
 export function clientId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  // RFC 4122 v4 fallback for elderly Safari on older iPads.
-  const rnd = (n: number) =>
-    Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join(
-      '',
-    );
-  return `${rnd(8)}-${rnd(4)}-4${rnd(3)}-${((Math.floor(Math.random() * 4) + 8).toString(16))}${rnd(3)}-${rnd(12)}`;
+  return uuidV4();
 }
