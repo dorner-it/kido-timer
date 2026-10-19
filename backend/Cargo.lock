@@ -1458,6 +1458,7 @@ dependencies = [
  "hmac",
  "http-body-util",
  "jsonwebtoken",
+ "kido-core",
  "lambda_http",
  "rand 0.8.6",
  "reqwest",
@@ -1472,6 +1473,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "kido-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
  "uuid",
 ]
 

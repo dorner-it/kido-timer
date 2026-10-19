@@ -3,16 +3,21 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete as method_delete, get, post};
+use axum::routing::{delete as method_delete, get, post, put};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use kido_core::catalogue::{self, CatalogueEntry};
+
 use crate::db::{disciplines, events, penalties, runners, runs, teams};
 use crate::error::{AppError, AppResult};
+use crate::models::penalty::catalogue_delta_ms;
 use crate::models::{
-    Discipline, Event, Penalty, PenaltyStatus, Run, Runner, StationKind, SyncMode, Team,
+    Discipline, Event, JudgeMode, LineupConfirmedBy, Penalty, PenaltyKind, PenaltyStatus, Run,
+    Runner, StationKind, SyncMode, Team, TimerMode,
 };
+use crate::routes::runs::{LineupInput, apply_lineup, validate_lineup};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<AppState> {
@@ -20,7 +25,10 @@ pub fn router() -> axum::Router<AppState> {
         // Legacy slot-token surface (kept so existing QR codes keep
         // working until the next event is created):
         .route("/{owner_sub}/{slot}/{token}/state", get(state_endpoint))
-        .route("/{owner_sub}/{slot}/{token}/penalties", post(submit_penalty))
+        .route(
+            "/{owner_sub}/{slot}/{token}/penalties",
+            post(submit_penalty),
+        )
         .route(
             "/{owner_sub}/{slot}/{token}/penalties/{penalty_id}",
             method_delete(withdraw_penalty),
@@ -34,6 +42,10 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/{owner_sub}/{token}/penalties/{penalty_id}",
             method_delete(withdraw_station_penalty),
+        )
+        .route(
+            "/{owner_sub}/{token}/runs/{run_id}/lineup",
+            put(set_station_lineup),
         )
 }
 
@@ -92,7 +104,10 @@ pub struct DeciderState {
     /// is selected yet ("Warte auf Wettkampf").
     pub discipline: Option<PublicDiscipline>,
     pub slot: u8,
+    /// Kept for old clients = `current_runs[0]`.
     pub current_run: Option<DeciderRunView>,
+    /// One entry per current run, ordered by lane.
+    pub current_runs: Vec<DeciderRunView>,
     /// True iff the active discipline is in `offline` sync mode (or no
     /// discipline is selected). The pad UI renders a stub when this is
     /// set; penalty submissions are also rejected server-side then.
@@ -111,14 +126,171 @@ pub struct PublicEvent {
 pub struct PublicDiscipline {
     pub id: Uuid,
     pub name: String,
-    pub mode: crate::models::TimerMode,
+    pub mode: TimerMode,
+    pub lane_count: u8,
+    pub judge_mode: JudgeMode,
 }
 
-#[derive(Serialize)]
+impl PublicDiscipline {
+    fn from_discipline(d: &Discipline) -> Self {
+        Self {
+            id: d.id,
+            name: d.name.clone(),
+            mode: d.mode,
+            lane_count: d.lane_count,
+            judge_mode: d.judge_mode,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub struct DeciderRunView {
     pub run: Run,
     pub team: Team,
+    /// Legacy: the run's single runner (individual modes). Usually `null`.
     pub runner: Option<Runner>,
+    /// The team's full roster (incl. substitutes), by position — the
+    /// Startlinie judge ticks the lineup from this list.
+    pub runners: Vec<Runner>,
+}
+
+/// Keep only the runs listed in `current_ids` and order them by lane
+/// (runs without a lane last, ties in `current_ids` order).
+pub fn order_current_runs(runs: Vec<Run>, current_ids: &[Uuid]) -> Vec<Run> {
+    let mut picked: Vec<(usize, Run)> = runs
+        .into_iter()
+        .filter_map(|r| {
+            current_ids
+                .iter()
+                .position(|id| *id == r.id)
+                .map(|i| (i, r))
+        })
+        .collect();
+    picked.sort_by_key(|(i, r)| (r.lane.unwrap_or(u8::MAX), *i));
+    picked.into_iter().map(|(_, r)| r).collect()
+}
+
+/// Resolve the run a judge submission targets.
+///
+/// - No current run → `409 conflict`.
+/// - `run_id` given → must be one of `current_ids` (`409 conflict`
+///   otherwise — the organizer moved on).
+/// - `run_id` omitted → allowed only when exactly one run is current
+///   (backwards compatible); with several current runs → `400
+///   validation`.
+pub fn resolve_target_run(requested: Option<Uuid>, current_ids: &[Uuid]) -> AppResult<Uuid> {
+    if current_ids.is_empty() {
+        return Err(AppError::Conflict("no run is currently active".into()));
+    }
+    match requested {
+        Some(id) if current_ids.contains(&id) => Ok(id),
+        Some(id) => Err(AppError::Conflict(format!(
+            "run {id} ist nicht (mehr) aktuell"
+        ))),
+        None if current_ids.len() == 1 => Ok(current_ids[0]),
+        None => Err(AppError::Validation(
+            "run_id ist erforderlich, wenn mehrere Läufe aktuell sind".into(),
+        )),
+    }
+}
+
+/// Catalogue checks for a station submission: station allowed for the
+/// discipline mode, code exists and belongs to that station.
+pub fn validate_station_submission(
+    mode: TimerMode,
+    station: StationKind,
+    code: &str,
+) -> AppResult<&'static CatalogueEntry> {
+    if !station.allowed_for(mode) {
+        return Err(AppError::Validation(format!(
+            "station {} is not valid for mode {mode:?}",
+            station.as_str()
+        )));
+    }
+    let entry = catalogue::lookup(code)
+        .ok_or_else(|| AppError::Validation(format!("unbekannter Fehlercode {code}")))?;
+    if entry.station != station {
+        return Err(AppError::Validation(format!(
+            "Fehlercode {code} gehört nicht zur Station {}",
+            station.as_str()
+        )));
+    }
+    Ok(entry)
+}
+
+/// Build the penalty row for a catalogue submission. `existing` is the
+/// pending row with the same `client_id` (idempotent re-submit).
+pub fn build_station_penalty(
+    id: Uuid,
+    run: &Run,
+    station: StationKind,
+    entry: &CatalogueEntry,
+    existing: Option<&Penalty>,
+    now: chrono::DateTime<Utc>,
+) -> Penalty {
+    Penalty {
+        id,
+        event_id: run.event_id,
+        discipline_id: run.discipline_id,
+        run_id: run.id,
+        team_id: run.team_id,
+        runner_id: run.runner_id,
+        kind: entry.kind,
+        code: Some(entry.code.to_string()),
+        station: Some(station),
+        is_disqualification: entry.kind == PenaltyKind::Fv,
+        // No slot identity in the station flow — 0 is the sentinel.
+        decider_slot: existing.map(|p| p.decider_slot).unwrap_or(0),
+        delta_ms: catalogue_delta_ms(entry.kind),
+        reason_code: None,
+        status: PenaltyStatus::Pending,
+        created_at: existing.map(|p| p.created_at).unwrap_or(now),
+        reviewed_at: None,
+        reviewed_by: None,
+    }
+}
+
+/// Load the current runs of `disc` with team + roster, ordered by lane.
+async fn load_current_runs(
+    state: &AppState,
+    event: &Event,
+    disc: &Discipline,
+) -> AppResult<Vec<DeciderRunView>> {
+    if event.current_run_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
+    let current = order_current_runs(runs_for_disc, &event.current_run_ids);
+    if current.is_empty() {
+        return Ok(Vec::new());
+    }
+    let team_list = teams::list_for_event(&state.db, event.id).await?;
+    let runner_list = runners::list_for_event(&state.db, event.id).await?;
+
+    let mut out = Vec::with_capacity(current.len());
+    for run in current {
+        let team = team_list
+            .iter()
+            .find(|t| t.id == run.team_id)
+            .cloned()
+            .ok_or_else(|| AppError::Internal("run references unknown team".into()))?;
+        let mut roster: Vec<Runner> = runner_list
+            .iter()
+            .filter(|r| r.team_id == run.team_id)
+            .cloned()
+            .collect();
+        roster.sort_by_key(|r| r.position);
+        let runner = run
+            .runner_id
+            .and_then(|rid| roster.iter().find(|r| r.id == rid).cloned());
+        out.push(DeciderRunView {
+            run,
+            team,
+            runner,
+            runners: roster,
+        });
+    }
+    Ok(out)
 }
 
 pub async fn state_endpoint(
@@ -140,15 +312,12 @@ pub async fn state_endpoint(
             discipline: None,
             slot,
             current_run: None,
+            current_runs: Vec::new(),
             disabled: true,
         }));
     };
 
-    let public_disc = PublicDiscipline {
-        id: disc.id,
-        name: disc.name.clone(),
-        mode: disc.mode,
-    };
+    let public_disc = PublicDiscipline::from_discipline(&disc);
 
     if disc.sync_mode == SyncMode::Offline {
         return Ok(Json(DeciderState {
@@ -156,40 +325,20 @@ pub async fn state_endpoint(
             discipline: Some(public_disc),
             slot,
             current_run: None,
+            current_runs: Vec::new(),
             disabled: true,
         }));
     }
 
-    let current_run = if let Some(run_id) = event.current_run_id {
-        let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
-        let run = runs_for_disc.into_iter().find(|r| r.id == run_id);
-        match run {
-            Some(run) => {
-                let team = teams::list_for_event(&state.db, event.id)
-                    .await?
-                    .into_iter()
-                    .find(|t| t.id == run.team_id)
-                    .ok_or_else(|| AppError::Internal("run references unknown team".into()))?;
-                let runner = match run.runner_id {
-                    Some(rid) => runners::list_for_team(&state.db, event.id, run.team_id)
-                        .await?
-                        .into_iter()
-                        .find(|r| r.id == rid),
-                    None => None,
-                };
-                Some(DeciderRunView { run, team, runner })
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
+    let current_runs = load_current_runs(&state, &event, &disc).await?;
+    let current_run = current_runs.first().cloned();
 
     Ok(Json(DeciderState {
         event: public_event,
         discipline: Some(public_disc),
         slot,
         current_run,
+        current_runs,
         disabled: false,
     }))
 }
@@ -219,75 +368,75 @@ pub async fn submit_penalty(
         ));
     }
 
-    let run_id = event
-        .current_run_id
-        .ok_or_else(|| AppError::Conflict("no run is currently active".into()))?;
-
-    let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
-    let run = runs_for_disc
-        .into_iter()
-        .find(|r| r.id == run_id)
-        .ok_or_else(|| AppError::Internal("current_run_id references unknown run".into()))?;
+    // The slot QR code knows no run: works while exactly one run is
+    // current.
+    if event.current_run_ids.len() > 1 {
+        return Err(AppError::Conflict(
+            "mehrere Läufe sind aktuell; der Slot-QR-Code kann keinen Lauf wählen — bitte den Stations-QR-Code verwenden".into(),
+        ));
+    }
+    let run_id = resolve_target_run(None, &event.current_run_ids)?;
+    let run = runs::find(&state.db, event.id, disc.id, run_id)
+        .await?
+        .ok_or_else(|| AppError::Internal("current_run_ids references unknown run".into()))?;
 
     let penalty_id = input.client_id.unwrap_or_else(Uuid::new_v4);
     let now = Utc::now();
 
-    if let Some(existing) = penalties::get(&state.db, event.id, disc.id, penalty_id).await? {
+    let existing = penalties::get(&state.db, event.id, disc.id, penalty_id).await?;
+    if let Some(existing) = existing.as_ref() {
         if existing.decider_slot != slot {
             return Err(AppError::Conflict(
                 "client_id belongs to a different slot".into(),
             ));
         }
         if existing.status != PenaltyStatus::Pending {
-            return Ok((StatusCode::OK, Json(existing)));
+            return Ok((StatusCode::OK, Json(existing.clone())));
         }
-        let penalty = Penalty {
-            id: existing.id,
-            event_id: event.id,
-            discipline_id: disc.id,
-            run_id: run.id,
-            team_id: run.team_id,
-            runner_id: run.runner_id,
-            station: existing.station,
-            is_disqualification: existing.is_disqualification,
-            decider_slot: slot,
-            delta_ms: input.delta_ms,
-            reason_code: input
-                .reason_code
-                .map(|r| r.trim().to_string())
-                .filter(|r| !r.is_empty()),
-            status: PenaltyStatus::Pending,
-            created_at: existing.created_at,
-            reviewed_at: None,
-            reviewed_by: None,
-        };
-        penalties::put(&state.db, &penalty).await?;
-        return Ok((StatusCode::OK, Json(penalty)));
     }
+    let penalty = build_slot_penalty(penalty_id, &run, slot, &input, existing.as_ref(), now);
+    penalties::put(&state.db, &penalty).await?;
+    let code = if existing.is_some() {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((code, Json(penalty)))
+}
 
-    let penalty = Penalty {
-        id: penalty_id,
-        event_id: event.id,
-        discipline_id: disc.id,
+/// Penalty row for the legacy slot route: always `kind = sz`,
+/// `code = null`, `delta_ms` exactly as sent, no station.
+pub fn build_slot_penalty(
+    id: Uuid,
+    run: &Run,
+    slot: u8,
+    input: &SubmitPenaltyInput,
+    existing: Option<&Penalty>,
+    now: chrono::DateTime<Utc>,
+) -> Penalty {
+    Penalty {
+        id,
+        event_id: run.event_id,
+        discipline_id: run.discipline_id,
         run_id: run.id,
         team_id: run.team_id,
         runner_id: run.runner_id,
-        station: None,
+        kind: PenaltyKind::Sz,
+        code: None,
+        station: existing.and_then(|p| p.station),
         is_disqualification: false,
         decider_slot: slot,
         delta_ms: input.delta_ms,
         reason_code: input
             .reason_code
+            .as_ref()
             .map(|r| r.trim().to_string())
             .filter(|r| !r.is_empty()),
         status: PenaltyStatus::Pending,
-        created_at: now,
+        created_at: existing.map(|p| p.created_at).unwrap_or(now),
         reviewed_at: None,
         reviewed_by: None,
-    };
-    penalties::put(&state.db, &penalty).await?;
-
-    Ok((StatusCode::CREATED, Json(penalty)))
+    }
 }
 
 // ===== withdraw penalty =====
@@ -314,7 +463,9 @@ pub async fn withdraw_penalty(
         return Err(AppError::Forbidden);
     }
     if penalty.status != PenaltyStatus::Pending {
-        return Err(AppError::Conflict("only pending penalties can be withdrawn".into()));
+        return Err(AppError::Conflict(
+            "only pending penalties can be withdrawn".into(),
+        ));
     }
 
     penalties::delete(&state.db, event.id, disc.id, penalty_id).await?;
@@ -362,7 +513,10 @@ async fn authorize_station(
 pub struct StationDeciderState {
     pub event: PublicEvent,
     pub discipline: Option<PublicDiscipline>,
+    /// Kept for old clients = `current_runs[0]`.
     pub current_run: Option<DeciderRunView>,
+    /// NEW: one entry per current run, ordered by lane.
+    pub current_runs: Vec<DeciderRunView>,
     pub disabled: bool,
     /// Stations the current discipline allows. Empty when no discipline
     /// is on the lane (the client then shows "waiting for organiser").
@@ -387,79 +541,54 @@ pub async fn station_state_endpoint(
             event: public_event,
             discipline: None,
             current_run: None,
+            current_runs: Vec::new(),
             disabled: true,
             allowed_stations: Vec::new(),
         }));
     };
 
-    let public_disc = PublicDiscipline {
-        id: disc.id,
-        name: disc.name.clone(),
-        mode: disc.mode,
-    };
-    let allowed = StationKind::for_mode(disc.mode);
+    let public_disc = PublicDiscipline::from_discipline(&disc);
+    let allowed = StationKind::for_mode(disc.mode).to_vec();
 
     if disc.sync_mode == SyncMode::Offline {
         return Ok(Json(StationDeciderState {
             event: public_event,
             discipline: Some(public_disc),
             current_run: None,
+            current_runs: Vec::new(),
             disabled: true,
             allowed_stations: allowed,
         }));
     }
 
-    let current_run = if let Some(run_id) = event.current_run_id {
-        let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
-        let run = runs_for_disc.into_iter().find(|r| r.id == run_id);
-        match run {
-            Some(run) => {
-                let team = teams::list_for_event(&state.db, event.id)
-                    .await?
-                    .into_iter()
-                    .find(|t| t.id == run.team_id)
-                    .ok_or_else(|| AppError::Internal("run references unknown team".into()))?;
-                let runner = match run.runner_id {
-                    Some(rid) => runners::list_for_team(&state.db, event.id, run.team_id)
-                        .await?
-                        .into_iter()
-                        .find(|r| r.id == rid),
-                    None => None,
-                };
-                Some(DeciderRunView { run, team, runner })
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
+    let current_runs = load_current_runs(&state, &event, &disc).await?;
+    let current_run = current_runs.first().cloned();
 
     Ok(Json(StationDeciderState {
         event: public_event,
         discipline: Some(public_disc),
         current_run,
+        current_runs,
         disabled: false,
         allowed_stations: allowed,
     }))
 }
 
-#[derive(Deserialize)]
+/// Body of the station submit. `kind` and `delta_ms` come from the
+/// catalogue entry of `code`.
+#[derive(Debug, Deserialize)]
 pub struct SubmitStationPenaltyInput {
     pub station: StationKind,
-    /// Time delta to add to the run's correction. Omit (`None`) when
-    /// the submission is a disqualification — the server then stamps
-    /// the sentinel `DSQ_DELTA_MS` value so existing time-based code
-    /// paths keep working.
-    pub delta_ms: Option<i32>,
+    /// Target run; optional only while exactly one run is current.
     #[serde(default)]
-    pub is_disqualification: bool,
-    pub reason_code: Option<String>,
+    pub run_id: Option<Uuid>,
+    /// Catalogue code (`"<station>.<slug>"`). Required — `Option` only
+    /// so a missing value yields `400 validation`.
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
     pub client_id: Option<Uuid>,
 }
-
-/// 999 s. Matches `decider-presets.ts::COMMON_DSQ.delta_ms` so the
-/// desktop export keeps treating these rows the same way it does now.
-pub const DSQ_DELTA_MS: i32 = 999_000;
 
 pub async fn submit_station_penalty(
     State(state): State<AppState>,
@@ -476,96 +605,42 @@ pub async fn submit_station_penalty(
             "Wettkampf läuft offline; Strafrichter sind deaktiviert".into(),
         ));
     }
-    if !input.station.allowed_for(disc.mode) {
-        return Err(AppError::Validation(format!(
-            "station {} is not valid for mode {:?}",
-            input.station.as_str(),
-            disc.mode
-        )));
-    }
-    if input.is_disqualification && input.delta_ms.is_some() {
-        return Err(AppError::Validation(
-            "delta_ms must be omitted when is_disqualification is true".into(),
-        ));
-    }
-    if !input.is_disqualification && input.delta_ms.is_none() {
-        return Err(AppError::Validation(
-            "either delta_ms or is_disqualification must be provided".into(),
-        ));
-    }
-
-    let run_id = event
-        .current_run_id
-        .ok_or_else(|| AppError::Conflict("no run is currently active".into()))?;
-    let runs_for_disc = runs::list_for_discipline(&state.db, event.id, disc.id).await?;
-    let run = runs_for_disc
-        .into_iter()
-        .find(|r| r.id == run_id)
-        .ok_or_else(|| AppError::Internal("current_run_id references unknown run".into()))?;
-
-    let delta_ms = if input.is_disqualification {
-        DSQ_DELTA_MS
-    } else {
-        input.delta_ms.unwrap_or(0)
-    };
+    let code = input
+        .code
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| AppError::Validation("code (Fehlercode) muss angegeben werden".into()))?;
+    let entry = validate_station_submission(disc.mode, input.station, code)?;
+    let run_id = resolve_target_run(input.run_id, &event.current_run_ids)?;
+    let run = runs::find(&state.db, event.id, disc.id, run_id)
+        .await?
+        .ok_or_else(|| AppError::Internal("current_run_ids references unknown run".into()))?;
 
     let penalty_id = input.client_id.unwrap_or_else(Uuid::new_v4);
-    let now = Utc::now();
-
-    if let Some(existing) = penalties::get(&state.db, event.id, disc.id, penalty_id).await? {
-        // Same idempotency contract as the slot flow: a second PUT
-        // with the same client_id upserts the row when still pending,
-        // or returns the already-reviewed copy unchanged.
+    let existing = penalties::get(&state.db, event.id, disc.id, penalty_id).await?;
+    // Idempotency: a re-submit with the same client_id upserts the row
+    // while still pending, or returns the already-reviewed copy.
+    if let Some(existing) = existing.as_ref() {
         if existing.status != PenaltyStatus::Pending {
-            return Ok((StatusCode::OK, Json(existing)));
+            return Ok((StatusCode::OK, Json(existing.clone())));
         }
-        let penalty = Penalty {
-            id: existing.id,
-            event_id: event.id,
-            discipline_id: disc.id,
-            run_id: run.id,
-            team_id: run.team_id,
-            runner_id: run.runner_id,
-            station: Some(input.station),
-            is_disqualification: input.is_disqualification,
-            decider_slot: existing.decider_slot,
-            delta_ms,
-            reason_code: input
-                .reason_code
-                .map(|r| r.trim().to_string())
-                .filter(|r| !r.is_empty()),
-            status: PenaltyStatus::Pending,
-            created_at: existing.created_at,
-            reviewed_at: None,
-            reviewed_by: None,
-        };
-        penalties::put(&state.db, &penalty).await?;
-        return Ok((StatusCode::OK, Json(penalty)));
     }
-
-    let penalty = Penalty {
-        id: penalty_id,
-        event_id: event.id,
-        discipline_id: disc.id,
-        run_id: run.id,
-        team_id: run.team_id,
-        runner_id: run.runner_id,
-        station: Some(input.station),
-        is_disqualification: input.is_disqualification,
-        // No slot identity in the new flow — leave 0 as a sentinel.
-        decider_slot: 0,
-        delta_ms,
-        reason_code: input
-            .reason_code
-            .map(|r| r.trim().to_string())
-            .filter(|r| !r.is_empty()),
-        status: PenaltyStatus::Pending,
-        created_at: now,
-        reviewed_at: None,
-        reviewed_by: None,
-    };
+    let penalty = build_station_penalty(
+        penalty_id,
+        &run,
+        input.station,
+        entry,
+        existing.as_ref(),
+        Utc::now(),
+    );
     penalties::put(&state.db, &penalty).await?;
-    Ok((StatusCode::CREATED, Json(penalty)))
+    let status = if existing.is_some() {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((status, Json(penalty)))
 }
 
 #[derive(Deserialize)]
@@ -610,4 +685,59 @@ pub async fn withdraw_station_penalty(
 
     penalties::delete(&state.db, event.id, disc.id, penalty_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ===== judge lineup (Startlinie) =====
+
+/// Body of the judge lineup endpoint. `station` is optional: when the
+/// client sends it, it must be a station that records lineups
+/// (`startlinie`).
+#[derive(Debug, Deserialize)]
+pub struct StationLineupInput {
+    #[serde(flatten)]
+    pub lineup: LineupInput,
+    #[serde(default)]
+    pub station: Option<StationKind>,
+}
+
+/// Only the Startlinie judge may confirm a lineup.
+pub fn check_lineup_station(station: Option<StationKind>) -> AppResult<()> {
+    match station {
+        Some(s) if !s.records_lineup() => Err(AppError::Forbidden),
+        _ => Ok(()),
+    }
+}
+
+/// `PUT /api/decider/{owner_sub}/{token}/runs/{run_id}/lineup` — the
+/// Startlinie judge confirms who actually runs. The run must be one of
+/// the event's `current_run_ids`.
+pub async fn set_station_lineup(
+    State(state): State<AppState>,
+    Path((owner_sub, token, run_id)): Path<(String, String, Uuid)>,
+    Json(input): Json<StationLineupInput>,
+) -> AppResult<Json<Run>> {
+    let (event, current_disc) = authorize_station(&state, &owner_sub, &token).await?;
+    let disc = current_disc.ok_or_else(|| {
+        AppError::Conflict("no discipline is currently selected on the lane".into())
+    })?;
+    if disc.sync_mode == SyncMode::Offline {
+        return Err(AppError::Conflict(
+            "Wettkampf läuft offline; Strafrichter sind deaktiviert".into(),
+        ));
+    }
+    check_lineup_station(input.station)?;
+    let run_id = resolve_target_run(Some(run_id), &event.current_run_ids)?;
+    let mut run = runs::find(&state.db, event.id, disc.id, run_id)
+        .await?
+        .ok_or_else(|| AppError::Internal("current_run_ids references unknown run".into()))?;
+    let roster = runners::list_for_team(&state.db, event.id, run.team_id).await?;
+    validate_lineup(&input.lineup.runner_ids, &roster, run.team_id)?;
+    apply_lineup(
+        &mut run,
+        input.lineup.runner_ids,
+        LineupConfirmedBy::Startlinie,
+        Utc::now(),
+    );
+    runs::put(&state.db, &run).await?;
+    Ok(Json(run))
 }

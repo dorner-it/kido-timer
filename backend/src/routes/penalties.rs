@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::auth::AuthenticatedUser;
 use crate::db::{penalties, runs};
 use crate::error::{AppError, AppResult};
-use crate::models::{Penalty, PenaltyStatus};
+use crate::models::{Penalty, PenaltyKind, PenaltyStatus};
 use crate::routes::events::require_owned;
 use crate::state::AppState;
 
@@ -98,11 +98,7 @@ pub async fn reject(
     Ok(Json(penalty))
 }
 
-async fn find_penalty(
-    state: &AppState,
-    event_id: Uuid,
-    penalty_id: Uuid,
-) -> AppResult<Penalty> {
+async fn find_penalty(state: &AppState, event_id: Uuid, penalty_id: Uuid) -> AppResult<Penalty> {
     penalties::list_for_event(&state.db, event_id)
         .await?
         .into_iter()
@@ -122,6 +118,7 @@ async fn find_penalty(
 pub struct BulkApproveResponse {
     pub approved: u32,
     pub rejected: u32,
+    /// Approved FV ("Fehlversuch") penalties. Name kept for old clients.
     pub dq: u32,
 }
 
@@ -150,7 +147,7 @@ pub async fn bulk_approve(
         p.status = PenaltyStatus::Approved;
         p.reviewed_at = Some(now);
         p.reviewed_by = Some(reviewer.clone());
-        if p.is_disqualification {
+        if p.kind == PenaltyKind::Fv {
             dq += 1;
         }
         touched.insert((p.discipline_id, p.run_id));
@@ -169,6 +166,11 @@ pub async fn bulk_approve(
     }))
 }
 
+/// Writes the sum of approved `delta_ms` into `Run.correction_ms`.
+/// Legacy display value for pre-2027 clients only — scoring
+/// (`kido_core::scoring`) never reads `correction_ms` and adds 15 s per
+/// counting SZ itself, so penalties are not counted twice
+/// (see docs/contract-pr1-2027.md).
 async fn recompute_run_correction(
     state: &AppState,
     event_id: Uuid,

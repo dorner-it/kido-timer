@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::db::client::DbClient;
 use crate::db::keys;
 use crate::error::{AppError, AppResult};
-use crate::models::{Discipline, SyncMode, TimerMode};
+use crate::models::{Discipline, JudgeMode, SyncMode, TimerMode};
 
 #[derive(Serialize, Deserialize)]
 struct DisciplineItem {
@@ -23,6 +23,12 @@ struct DisciplineItem {
     event_id: Uuid,
     name: String,
     mode: TimerMode,
+    /// Missing on pre-2027 rows → `mode.default_lane_count()`.
+    #[serde(default)]
+    lane_count: Option<u8>,
+    /// Missing on pre-2027 rows → `per_station`.
+    #[serde(default)]
+    judge_mode: Option<JudgeMode>,
     #[serde(default)]
     sync_mode: SyncMode,
     position: u32,
@@ -40,6 +46,8 @@ impl DisciplineItem {
             event_id: d.event_id,
             name: d.name.clone(),
             mode: d.mode,
+            lane_count: Some(d.lane_count),
+            judge_mode: Some(d.judge_mode),
             sync_mode: d.sync_mode,
             position: d.position,
             created_at: d.created_at,
@@ -53,6 +61,10 @@ impl DisciplineItem {
             event_id: self.event_id,
             name: self.name,
             mode: self.mode,
+            lane_count: self
+                .lane_count
+                .unwrap_or_else(|| self.mode.default_lane_count()),
+            judge_mode: self.judge_mode.unwrap_or_default(),
             sync_mode: self.sync_mode,
             position: self.position,
             created_at: self.created_at,
@@ -85,7 +97,10 @@ pub async fn delete(client: &DbClient, discipline: &Discipline) -> AppResult<()>
         .key("PK", AttributeValue::S(keys::event_pk(discipline.event_id)))
         .key(
             "SK",
-            AttributeValue::S(keys::event_sk_discipline(discipline.position, discipline.id)),
+            AttributeValue::S(keys::event_sk_discipline(
+                discipline.position,
+                discipline.id,
+            )),
         )
         .send()
         .await
@@ -144,7 +159,10 @@ pub async fn set_sync_mode(
         .key("PK", AttributeValue::S(keys::event_pk(discipline.event_id)))
         .key(
             "SK",
-            AttributeValue::S(keys::event_sk_discipline(discipline.position, discipline.id)),
+            AttributeValue::S(keys::event_sk_discipline(
+                discipline.position,
+                discipline.id,
+            )),
         )
         .update_expression("SET sync_mode = :s, updated_at = :u")
         .expression_attribute_values(":s", value)
@@ -153,4 +171,69 @@ pub async fn set_sync_mode(
         .await
         .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_item() -> HashMap<String, AttributeValue> {
+        serde_dynamo::to_item(serde_json::json!({
+            "PK": "EVENT#x",
+            "SK": "DISC#0001#x",
+            "id": Uuid::nil(),
+            "event_id": Uuid::nil(),
+            "name": "Gruppenstafette",
+            "mode": "gruppenstaffette",
+            "position": 1,
+            "created_at": "2026-05-29T12:00:00Z",
+            "updated_at": "2026-05-29T12:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn legacy_item_loads_with_defaults() {
+        let mut item = legacy_item();
+        // Pin lane_count so the test does not depend on kido-core.
+        item.insert("lane_count".into(), AttributeValue::N("2".into()));
+        let parsed: DisciplineItem = serde_dynamo::from_item(item).unwrap();
+        let d = parsed.into_discipline();
+        assert_eq!(d.lane_count, 2);
+        assert_eq!(d.judge_mode, JudgeMode::PerStation);
+        assert_eq!(d.sync_mode, SyncMode::Live);
+    }
+
+    #[test]
+    fn legacy_item_without_lane_count_uses_mode_default() {
+        let parsed: DisciplineItem = serde_dynamo::from_item(legacy_item()).unwrap();
+        assert_eq!(parsed.into_discipline().lane_count, 2);
+    }
+
+    #[test]
+    fn item_roundtrip_keeps_new_fields() {
+        let mut item = legacy_item();
+        item.insert("lane_count".into(), AttributeValue::N("1".into()));
+        item.insert(
+            "judge_mode".into(),
+            AttributeValue::S("per_station_and_lane".into()),
+        );
+        let d = serde_dynamo::from_item::<_, DisciplineItem>(item)
+            .unwrap()
+            .into_discipline();
+        let again: HashMap<String, AttributeValue> =
+            serde_dynamo::to_item(DisciplineItem::from_discipline(&d)).unwrap();
+        assert_eq!(
+            again.get("lane_count"),
+            Some(&AttributeValue::N("1".into()))
+        );
+        assert_eq!(
+            again.get("judge_mode"),
+            Some(&AttributeValue::S("per_station_and_lane".into()))
+        );
+        let back = serde_dynamo::from_item::<_, DisciplineItem>(again)
+            .unwrap()
+            .into_discipline();
+        assert_eq!(back, d);
+    }
 }

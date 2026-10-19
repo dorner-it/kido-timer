@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'crates/**'
       - '.github/workflows/deploy-lambda.yaml'
   workflow_dispatch:
 

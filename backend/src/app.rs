@@ -51,8 +51,16 @@ async fn v1_gone() -> impl IntoResponse {
 }
 
 pub fn router(state: AppState) -> Router {
+    api_router().with_state(state)
+}
+
+/// Every route, before the state is attached. Split out so tests can
+/// build the full route table (route conflicts panic at build time)
+/// without AWS clients.
+pub fn api_router() -> Router<AppState> {
     Router::<AppState>::new()
         .route("/api/health", get(health))
+        .merge(routes::catalogue::router())
         .nest("/api/auth", routes::auth::router())
         .nest("/api/users", routes::users::router())
         .nest("/api/events", events_router())
@@ -65,5 +73,4 @@ pub fn router(state: AppState) -> Router {
         .route("/api/competitions/{*rest}", any(v1_gone))
         .route("/api/export/competitions", any(v1_gone))
         .route("/api/export/competitions/{*rest}", any(v1_gone))
-        .with_state(state)
 }

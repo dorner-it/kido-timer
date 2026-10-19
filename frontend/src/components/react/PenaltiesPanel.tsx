@@ -4,14 +4,25 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   PENALTY_STATUS_LABELS,
-  STATION_KIND_LABELS,
   apiClient,
+  type CatalogueEntry,
   type EventDetail as EventDetailData,
   type Penalty,
   type PenaltyStatus,
   type StationKind,
 } from '../../lib/api';
-import { formatTimeMs } from '../../lib/format';
+import {
+  PENALTY_KIND_LABELS,
+  PENALTY_KIND_SHORT,
+  PENALTY_KIND_TITLES,
+  indexCatalogue,
+  penaltyDeltaText,
+  penaltyDescription,
+  penaltyKind,
+  penaltyKindBadgeClasses,
+  penaltySummaryLine,
+} from '../../lib/penalties';
+import { STATION_KINDS, STATION_KIND_LABELS, stationLabel } from '../../lib/stations';
 
 interface Props {
   data: EventDetailData;
@@ -19,15 +30,7 @@ interface Props {
 }
 
 const STATUSES: PenaltyStatus[] = ['pending', 'approved', 'rejected'];
-const STATIONS: StationKind[] = [
-  'start',
-  'verteiler',
-  'strahlrohr',
-  'knoten',
-  'kuebelspritze',
-  'podest',
-  'strahlrohrlinie',
-];
+const STATIONS: readonly StationKind[] = STATION_KINDS;
 
 export default function PenaltiesPanel({ data, onChange }: Props) {
   const { event, disciplines, teams, runners, runs } = data;
@@ -38,6 +41,23 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
+
+  // Static catalogue for code → label. Failure is non-fatal: the list
+  // falls back to the raw code / reason_code.
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.catalogue
+      .list()
+      .then((c) => {
+        if (!cancelled) setCatalogue(c);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const catalogueIndex = useMemo(() => indexCatalogue(catalogue), [catalogue]);
 
   useEffect(() => {
     refresh();
@@ -123,14 +143,9 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
     const run = runById.get(runId);
     const team = run ? teamById.get(run.team_id) : null;
     const lines = pendings
-      .map((p) => {
-        const ds = p.station ? STATION_KIND_LABELS[p.station] : 'ohne Station';
-        const delta =
-          p.is_disqualification
-            ? 'DQ'
-            : `${p.delta_ms >= 0 ? '+' : ''}${formatTimeMs(Math.abs(p.delta_ms))}`;
-        return `• ${ds}: ${delta}${p.reason_code ? ` (${p.reason_code})` : ''}`;
-      })
+      .map((p) =>
+        penaltySummaryLine(p, catalogueIndex, (s) => stationLabel(s, 'ohne Station')),
+      )
       .join('\n');
     const header = run
       ? `Lauf ${run.run_number} – ${team?.name ?? '?'}`
@@ -149,7 +164,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
       // sees what happened without a toast system.
       // eslint-disable-next-line no-alert
       window.alert(
-        `Genehmigt: ${res.approved}, davon ${res.dq} Disqualifikation(en).`,
+        `Genehmigt: ${res.approved}, davon ${res.dq} Fehlversuch(e) (FV).`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Lauf-Abschluss fehlgeschlagen');
@@ -275,6 +290,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                 <Th>Mannschaft / Läufer</Th>
                 <Th>Station</Th>
                 <Th>Slot</Th>
+                <Th>Art</Th>
                 <Th className="text-right">Δ</Th>
                 <Th>Grund</Th>
                 <Th>Status</Th>
@@ -305,24 +321,20 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                         </span>
                       )}
                     </Td>
-                    <Td className="font-mono text-[11px]">
-                      {p.station ? STATION_KIND_LABELS[p.station] : '—'}
-                    </Td>
+                    <Td className="font-mono text-[11px]">{stationLabel(p.station)}</Td>
                     <Td className="font-mono">
                       {p.decider_slot > 0 ? `B${p.decider_slot}` : '—'}
                     </Td>
-                    <Td className="text-right font-mono tnum text-signal-glow">
-                      {p.is_disqualification ? (
-                        <span className="text-status-unknown">DQ</span>
-                      ) : (
-                        <>
-                          {p.delta_ms >= 0 ? '+' : ''}
-                          {formatTimeMs(Math.abs(p.delta_ms))}
-                        </>
-                      )}
+                    <Td>
+                      <KindBadge kind={penaltyKind(p)} />
                     </Td>
-                    <Td className="font-mono text-[11px] text-ink-200">
-                      {p.reason_code ?? '—'}
+                    <Td className="text-right font-mono tnum text-signal-glow">
+                      {penaltyDeltaText(p)}
+                    </Td>
+                    <Td className="text-[12px] text-ink-100">
+                      <span title={p.code ?? p.reason_code ?? undefined}>
+                        {penaltyDescription(p, catalogueIndex)}
+                      </span>
                     </Td>
                     <Td>
                       <StatusPill status={p.status} />
@@ -391,6 +403,20 @@ function Td({
   className?: string;
 }) {
   return <td className={['px-3 py-2 align-top', className ?? ''].join(' ')}>{children}</td>;
+}
+
+function KindBadge({ kind }: { kind: Penalty['kind'] }) {
+  return (
+    <span
+      className={`pill ${penaltyKindBadgeClasses(kind)}`}
+      title={`${PENALTY_KIND_LABELS[kind]} – ${PENALTY_KIND_TITLES[kind]}`}
+    >
+      {PENALTY_KIND_SHORT[kind]}
+      <span className="font-mono text-[10px] opacity-80">
+        {kind === 'sz' ? '+15 s' : 'ungültig'}
+      </span>
+    </span>
+  );
 }
 
 function StatusPill({ status }: { status: PenaltyStatus }) {
