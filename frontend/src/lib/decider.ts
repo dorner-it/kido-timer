@@ -4,42 +4,113 @@
  * Pure helpers for the judge (Strafrichter) station app.
  */
 
-import type { CatalogueEntry, StationPenaltyInput } from './api';
+import type { CatalogueEntry, JudgeMode, StationPenaltyInput } from './api';
 import { PENALTY_KIND_SHORT } from './penalties';
 import type { StationKind } from './stations';
 
-interface CurrentRunLike {
+export interface CurrentRunLike {
   run: { id: string; lane: number | null; run_number: number };
   team: { name: string };
 }
 
-export type SubmitTarget =
-  | { ok: true; run_id: string }
-  | { ok: false; reason: 'no_run' | 'multiple_runs'; message: string };
+/** Context of the judge for lane resolution. All optional so the
+ *  plain single-run call `resolveSubmitTarget(runs)` keeps working. */
+export interface JudgeContext {
+  judgeMode?: JudgeMode | null;
+  laneCount?: number | null;
+  /** Judge's own lane (`per_station_and_lane` only). */
+  myLane?: number | null;
+  /** Run the judge picked (tap → "Bahn 1 · Team"). */
+  selectedRunId?: string | null;
+}
+
+export type SubmitTarget<R extends CurrentRunLike = CurrentRunLike> =
+  | { ok: true; run_id: string; run: R }
+  | {
+      ok: false;
+      reason: 'no_run' | 'no_run_on_lane' | 'no_lane' | 'choose_run';
+      message: string;
+      /** Runs to choose from (`choose_run` only, ordered by lane). */
+      options: R[];
+    };
+
+/** `true` when this judge only watches a single lane. */
+export function isLaneBoundJudge(ctx: JudgeContext): boolean {
+  return ctx.judgeMode === 'per_station_and_lane' && (ctx.laneCount ?? 1) > 1;
+}
+
+/**
+ * Runs this judge may record errors for:
+ * - `per_station_and_lane` with 2+ lanes → only the run on the judge's
+ *   lane (runs without a lane are visible to every lane judge — legacy
+ *   data, better visible than lost). No lane chosen → nothing.
+ * - otherwise → all current runs.
+ * Order: by lane, runs without lane last (stable).
+ */
+export function visibleRuns<R extends CurrentRunLike>(
+  currentRuns: readonly R[],
+  ctx: JudgeContext = {},
+): R[] {
+  const sorted = [...currentRuns].sort(
+    (a, b) => (a.run.lane ?? Infinity) - (b.run.lane ?? Infinity),
+  );
+  if (!isLaneBoundJudge(ctx)) return sorted;
+  if (ctx.myLane == null) return [];
+  return sorted.filter((cr) => cr.run.lane === ctx.myLane || cr.run.lane == null);
+}
 
 /**
  * Which run a station submission goes to.
  *
- * TODO(PR 2 – Bahnauswahl): with more than one current run the judge
- * must pick the lane/team (judge_mode `per_station`) or only sees the
- * run on their own lane (`per_station_and_lane`). That selection plugs
- * in here: accept the selected run id and return it instead of
- * refusing. Until then only the single-run case can be submitted.
+ * - no current run → `no_run`
+ * - lane-bound judge without lane → `no_lane`; nothing on their lane →
+ *   `no_run_on_lane`
+ * - exactly one visible run → that run (no extra tap)
+ * - several visible runs (`per_station`, 2 lanes) → the selected run if
+ *   it is one of them, else `choose_run` with the options
  */
-export function resolveSubmitTarget(currentRuns: readonly CurrentRunLike[]): SubmitTarget {
+export function resolveSubmitTarget<R extends CurrentRunLike>(
+  currentRuns: readonly R[],
+  ctx: JudgeContext = {},
+): SubmitTarget<R> {
   if (currentRuns.length === 0) {
-    return { ok: false, reason: 'no_run', message: 'Aktuell läuft kein Lauf.' };
+    return { ok: false, reason: 'no_run', message: 'Aktuell läuft kein Lauf.', options: [] };
   }
-  if (currentRuns.length > 1) {
+  if (isLaneBoundJudge(ctx) && ctx.myLane == null) {
     return {
       ok: false,
-      reason: 'multiple_runs',
-      message:
-        'Mehrere Läufe gleichzeitig aktiv. Die Auswahl der Bahn folgt in einem ' +
-        'späteren Update — bitte den Fehler direkt beim Organisator melden.',
+      reason: 'no_lane',
+      message: 'Bitte zuerst deine Bahn wählen.',
+      options: [],
     };
   }
-  return { ok: true, run_id: currentRuns[0]!.run.id };
+  const runs = visibleRuns(currentRuns, ctx);
+  if (runs.length === 0) {
+    return {
+      ok: false,
+      reason: 'no_run_on_lane',
+      message: `Auf Bahn ${ctx.myLane} läuft gerade kein Lauf.`,
+      options: [],
+    };
+  }
+  if (runs.length === 1) {
+    return { ok: true, run_id: runs[0]!.run.id, run: runs[0]! };
+  }
+  const picked = ctx.selectedRunId
+    ? runs.find((cr) => cr.run.id === ctx.selectedRunId)
+    : undefined;
+  if (picked) return { ok: true, run_id: picked.run.id, run: picked };
+  return {
+    ok: false,
+    reason: 'choose_run',
+    message: 'Bitte die Bahn wählen.',
+    options: runs,
+  };
+}
+
+/** Errors can be entered (possibly after choosing a lane). */
+export function canEnterErrors(target: SubmitTarget): boolean {
+  return target.ok || target.reason === 'choose_run';
 }
 
 /** `"Bahn 1 · FF Musterstadt"`; without lane just the team name. */
