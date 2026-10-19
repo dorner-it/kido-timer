@@ -14,6 +14,7 @@ use crate::db::{disciplines, penalties, runs, team_entries, users};
 use crate::error::{AppError, AppResult};
 use crate::export;
 use crate::models::{Discipline, JudgeMode, PenaltyStatus, SyncMode, TeamEntry, TimerMode};
+use crate::onprem;
 use crate::routes::events::require_owned;
 use crate::state::AppState;
 
@@ -308,24 +309,66 @@ pub async fn import_results(
         runs_imported += 1;
     }
 
-    let mut penalties_imported = 0usize;
-    let mut penalties_skipped = 0usize;
-    let now = Utc::now();
-    for mut penalty in payload.approved_penalties {
-        if penalty.event_id != event_id || penalty.discipline_id != discipline_id {
-            penalties_skipped += 1;
-            continue;
+    // PR 6: files carry `penalties` (all statuses) → merge with "most
+    // advanced status wins". Older files (or a file without any
+    // penalties) → the legacy `approved_penalties` path. `penalties` is a
+    // superset of `approved_penalties`, so an empty `penalties` with a
+    // non-empty `approved_penalties` only happens for pre-PR-6 files.
+    let (penalties_imported, penalties_skipped) = if !payload.penalties.is_empty() {
+        let runs_now = runs::list_for_discipline(&state.db, event_id, discipline_id).await?;
+        let stored = penalties::list_for_event(&state.db, event_id).await?;
+        let plan = onprem::plan_import_penalties(
+            &disc,
+            &runs_now,
+            &stored,
+            &payload.penalties,
+            Utc::now(),
+        );
+        for id in &plan.review_conflicts {
+            tracing::warn!(
+                penalty_id = %id,
+                discipline_id = %discipline_id,
+                "import: review differs from the web (approved vs rejected); kept the web's value"
+            );
         }
-        penalty.status = PenaltyStatus::Approved;
-        if penalty.reviewed_at.is_none() {
-            penalty.reviewed_at = Some(now);
+        for p in &plan.to_put {
+            penalties::put(&state.db, p).await?;
         }
-        if penalty.reviewed_by.is_none() {
-            penalty.reviewed_by = Some("offline-import".to_string());
+        for (run_id, correction) in &plan.corrections {
+            if let Some(run) = runs_now.iter().find(|r| r.id == *run_id) {
+                runs::update_correction_ms(
+                    &state.db,
+                    event_id,
+                    discipline_id,
+                    run.run_number,
+                    run.id,
+                    *correction,
+                )
+                .await?;
+            }
         }
-        penalties::put(&state.db, &penalty).await?;
-        penalties_imported += 1;
-    }
+        (plan.imported, plan.skipped)
+    } else {
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        let now = Utc::now();
+        for mut penalty in payload.approved_penalties {
+            if penalty.event_id != event_id || penalty.discipline_id != discipline_id {
+                skipped += 1;
+                continue;
+            }
+            penalty.status = PenaltyStatus::Approved;
+            if penalty.reviewed_at.is_none() {
+                penalty.reviewed_at = Some(now);
+            }
+            if penalty.reviewed_by.is_none() {
+                penalty.reviewed_by = Some("offline-import".to_string());
+            }
+            penalties::put(&state.db, &penalty).await?;
+            imported += 1;
+        }
+        (imported, skipped)
+    };
 
     Ok(Json(ImportResultsResponse {
         runs_imported,
