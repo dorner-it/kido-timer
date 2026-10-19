@@ -88,6 +88,7 @@ pub fn sample_payload_json() -> String {
        "lineup": ["{RUNNER_A1}", "{RUNNER_A2}"],
        "lineup_confirmed_at": "2027-06-12T09:30:00Z", "lineup_confirmed_by": "startlinie",
        "time_source": "lichtschranke", "hand_time_1_ms": null, "hand_time_2_ms": null,
+       "penalties_accepted_at": null,
        "created_at": "2027-01-01T00:00:00Z", "updated_at": "2027-01-01T00:00:00Z" }},
     {{ "id": "{RUN_B1}", "event_id": "{EVENT}", "discipline_id": "{DISCIPLINE}",
        "team_id": "{TEAM_B}", "runner_id": null, "run_number": 2, "lane": 2,
@@ -95,6 +96,7 @@ pub fn sample_payload_json() -> String {
        "started_at": null, "ended_at": null, "lineup": [],
        "lineup_confirmed_at": null, "lineup_confirmed_by": null,
        "time_source": "lichtschranke", "hand_time_1_ms": null, "hand_time_2_ms": null,
+       "penalties_accepted_at": null,
        "created_at": "2027-01-01T00:00:00Z", "updated_at": "2027-01-01T00:00:00Z" }},
     {{ "id": "{RUN_C1}", "event_id": "{EVENT}", "discipline_id": "{DISCIPLINE}",
        "team_id": "{TEAM_C}", "runner_id": null, "run_number": 3, "lane": null,
@@ -102,6 +104,7 @@ pub fn sample_payload_json() -> String {
        "started_at": null, "ended_at": null, "lineup": [],
        "lineup_confirmed_at": null, "lineup_confirmed_by": null,
        "time_source": "lichtschranke", "hand_time_1_ms": null, "hand_time_2_ms": null,
+       "penalties_accepted_at": null,
        "created_at": "2027-01-01T00:00:00Z", "updated_at": "2027-01-01T00:00:00Z" }}
   ],
   "approved_penalties": [

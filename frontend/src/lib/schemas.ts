@@ -109,6 +109,7 @@ export const runReadSchema = z
     time_source: timeSourceSchema.catch('lichtschranke'),
     hand_time_1_ms: nullableInt,
     hand_time_2_ms: nullableInt,
+    penalties_accepted_at: nullableString,
   })
   .passthrough();
 

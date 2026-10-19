@@ -217,7 +217,13 @@ describe('run read schema', () => {
     expect(r.time_source).toBe('lichtschranke');
     expect(r.hand_time_1_ms).toBeNull();
     expect(r.hand_time_2_ms).toBeNull();
+    expect(r.penalties_accepted_at).toBeNull();
     expect(r.original_time_ms).toBe(47230);
+  });
+
+  it('keeps penalties_accepted_at', () => {
+    const r = normalizeRun({ ...legacyRun, penalties_accepted_at: ts });
+    expect(r.penalties_accepted_at).toBe(ts);
   });
 
   it('keeps hand times and lineup', () => {

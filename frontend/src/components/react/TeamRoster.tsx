@@ -8,6 +8,8 @@ import {
   type Runner,
   type Team,
 } from '../../lib/api';
+import { rostersByTeam } from '../../lib/lineup';
+import { useDialog } from './useDialog';
 
 interface Props {
   data: EventDetailData;
@@ -34,18 +36,9 @@ export default function TeamRoster({ data, onChange }: Props) {
     [teams],
   );
 
-  const runnersByTeam = useMemo(() => {
-    const m = new Map<string, Runner[]>();
-    for (const r of runners) {
-      const list = m.get(r.team_id) ?? [];
-      list.push(r);
-      m.set(r.team_id, list);
-    }
-    for (const list of m.values()) {
-      list.sort((a, b) => a.position - b.position);
-    }
-    return m;
-  }, [runners]);
+  // Position, then name — positions may repeat (create at an occupied
+  // position keeps both runners).
+  const runnersByTeam = useMemo(() => rostersByTeam(runners), [runners]);
 
   const addTeam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -163,6 +156,7 @@ function TeamBlock({
   const [draft, setDraft] = useState<RunnerDraft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const { confirm, dialog } = useDialog();
   const firstNameRef = useRef<HTMLInputElement | null>(null);
 
   const nextPosition = (runners[runners.length - 1]?.position ?? 0) + 1;
@@ -181,13 +175,13 @@ function TeamBlock({
   };
 
   const removeTeam = async () => {
-    if (
-      !confirm(
-        `Mannschaft „${team.name}" löschen? Alle Läufer dieser Mannschaft werden mit gelöscht.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: 'Mannschaft löschen?',
+      message: [`„${team.name}“ wird gelöscht.`, 'Alle Läufer dieser Mannschaft werden mit gelöscht.'],
+      confirmLabel: 'Löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiClient.teams.remove(event_id, team.id);
       onChange();
@@ -296,6 +290,7 @@ function TeamBlock({
               team_id={team.id}
               runner={runner}
               onChange={onChange}
+              onError={setErr}
             />
           ))}
 
@@ -320,6 +315,7 @@ function TeamBlock({
       )}
 
       {err && <p className="px-3 py-2 text-[12px] text-status-unknown">{err}</p>}
+      {dialog}
     </div>
   );
 }
@@ -329,16 +325,28 @@ function RunnerRow({
   team_id,
   runner,
   onChange,
+  onError,
 }: {
   event_id: string;
   team_id: string;
   runner: Runner;
   onChange: () => void;
+  onError: (message: string | null) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useDialog();
 
+  /**
+   * Saves the row and reloads the whole event afterwards (`onChange`).
+   * The reload matters for position changes: moving onto an occupied
+   * position swaps on the server (the other runner takes this runner's
+   * old position), and the PUT response only contains this runner. On
+   * failure (e.g. 409 after a concurrent change) we reload too, so the
+   * sheet shows what the server actually has.
+   */
   const update = async (patch: Partial<Runner>) => {
     setBusy(true);
+    onError(null);
     try {
       await apiClient.runners.update(event_id, team_id, runner.id, {
         first_name: patch.first_name ?? runner.first_name,
@@ -349,13 +357,23 @@ function RunnerRow({
         // untouched on the server.
       });
       onChange();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Läufer konnte nicht gespeichert werden');
+      onChange();
     } finally {
       setBusy(false);
     }
   };
 
   const remove = async () => {
-    if (!confirm(`Läufer „${runner.first_name} ${runner.last_name}" löschen?`)) return;
+    if (busy) return;
+    const ok = await confirm({
+      title: 'Läufer löschen?',
+      message: `„${runner.first_name} ${runner.last_name}“ wird aus der Mannschaft entfernt.`,
+      confirmLabel: 'Löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await apiClient.runners.remove(event_id, team_id, runner.id);
@@ -410,6 +428,7 @@ function RunnerRow({
           ✕
         </button>
       </div>
+      {dialog}
     </div>
   );
 }

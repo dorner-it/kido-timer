@@ -6,12 +6,12 @@
 
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Discipline, Event, EventDetail, Penalty, Run, Runner, Team, TeamEntry } from '../../../lib/api';
 import { indexCatalogue } from '../../../lib/penalties';
 import CurrentRunsControl from '../CurrentRunsControl';
-import RunReviewCard from '../RunReviewCard';
+import RunReviewCard, { PenaltyRow, runReviewAction } from '../RunReviewCard';
 import RunsPanel from '../RunsPanel';
 import { RunTime } from '../RunTime';
 
@@ -59,6 +59,7 @@ const run: Run = {
   time_source: 'handstopp',
   hand_time_1_ms: 47_230,
   hand_time_2_ms: 47_245,
+  penalties_accepted_at: null,
   created_at: ts,
   updated_at: ts,
 };
@@ -180,6 +181,108 @@ describe('RunReviewCard', () => {
     expect(html).not.toContain('Besetzung fehlt');
   });
 });
+
+describe('RunReviewCard – Rückgängig', () => {
+  const decided = (status: Penalty['status'], reviewed_at: string | null) => ({
+    ...pen('a', 'sz', status, 'startlinie.fruehstart'),
+    reviewed_at,
+    reviewed_by: reviewed_at ? 'sub' : null,
+  });
+
+  it('decided errors get "Rückgängig" before Übernehmen', () => {
+    expect(card([decided('approved', ts)])).toContain('>Rückgängig<');
+    expect(card([decided('rejected', ts)])).toContain('>Rückgängig<');
+  });
+
+  it('pending errors have no "Rückgängig"', () => {
+    expect(card([pen('a', 'sz', 'pending', 'startlinie.fruehstart')])).not.toContain('Rückgängig');
+  });
+
+  it('decisions frozen by Übernehmen have no "Rückgängig"', () => {
+    const taken = { ...run, penalties_accepted_at: '2027-05-01T08:45:00Z' };
+    // decided before / at the Übernehmen instant → frozen
+    expect(card([decided('approved', '2027-05-01T08:44:00Z')], taken)).not.toContain('Rückgängig');
+    expect(card([decided('approved', '2027-05-01T08:45:00Z')], taken)).not.toContain('Rückgängig');
+    // decided after Übernehmen → still undoable
+    expect(card([decided('rejected', '2027-05-01T08:46:00Z')], taken)).toContain('>Rückgängig<');
+  });
+
+  it('the "Rückgängig" button calls onUndo', () => {
+    const onUndo = vi.fn();
+    const onConfirm = vi.fn();
+    const onWithdraw = vi.fn();
+    // PenaltyRow uses no hooks → call it and walk the element tree.
+    const tree = PenaltyRow({
+      penalty: decided('approved', ts),
+      catalogue,
+      busy: false,
+      undoable: true,
+      onConfirm,
+      onWithdraw,
+      onUndo,
+    });
+    const button = findButton(tree, 'Rückgängig');
+    expect(button).toBeDefined();
+    (button!.props as { onClick: () => void }).onClick();
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onWithdraw).not.toHaveBeenCalled();
+  });
+
+  it('no button when not undoable', () => {
+    const tree = PenaltyRow({
+      penalty: decided('approved', ts),
+      catalogue,
+      busy: false,
+      undoable: false,
+      onConfirm: noop,
+      onWithdraw: noop,
+      onUndo: noop,
+    });
+    expect(findButton(tree, 'Rückgängig')).toBeUndefined();
+  });
+});
+
+describe('runReviewAction', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('undo POSTs to …/penalties/{id}/undo and returns the pending row', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(pen('p1', 'sz', 'pending', 'startlinie.fruehstart')), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await runReviewAction('e1', 'p1', 'undo');
+    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe('/api/events/e1/penalties/p1/undo');
+    expect(init.method).toBe('POST');
+    expect(p.status).toBe('pending');
+  });
+});
+
+type El = { type: unknown; props: { children?: unknown; [k: string]: unknown } };
+function findButton(node: unknown, label: string): El | undefined {
+  if (node == null || typeof node !== 'object') return undefined;
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = findButton(n, label);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  const el = node as El;
+  if (el.type === 'button' && textOf(el.props.children) === label) return el;
+  return findButton(el.props?.children, label);
+}
+function textOf(children: unknown): string {
+  if (typeof children === 'string') return children;
+  if (Array.isArray(children)) return children.map(textOf).join('');
+  return '';
+}
 
 describe('RunTime', () => {
   it('light barrier: no badge', () => {

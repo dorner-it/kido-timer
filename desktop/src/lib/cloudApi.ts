@@ -238,6 +238,18 @@ export async function onPremReviewPenalty(penaltyId: string, approve: boolean): 
   return invoke<Penalty>("onprem_review_penalty", { penaltyId, approve });
 }
 
+/** „Rückgängig“: entschiedener Fehler → wieder offen (bis „Übernehmen“). */
+export async function onPremUndoReview(penaltyId: string): Promise<Penalty> {
+  if (!IS_TAURI) return requireDesktop("Rückgängig");
+  return invoke<Penalty>("onprem_undo_review", { penaltyId });
+}
+
+/** Fehler, deren Entscheidung aus dem Web stammt (kein „Rückgängig“). */
+export async function onPremWebDecidedPenalties(): Promise<string[]> {
+  if (!IS_TAURI) return [];
+  return invoke<string[]>("onprem_web_decided_penalties");
+}
+
 /** „Übernehmen“: offene Fehler des Laufs → bestätigt. */
 export async function onPremTakeOver(runId: string): Promise<number> {
   if (!IS_TAURI) return requireDesktop("Übernehmen");

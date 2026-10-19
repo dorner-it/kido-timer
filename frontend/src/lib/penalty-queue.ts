@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, apiClient, type StationPenaltyInput } from './api';
+import { isInvalidAccessStatus } from './judge-access';
 import { uuidV4 } from './uuid';
 
 /**
@@ -19,9 +20,13 @@ import { uuidV4 } from './uuid';
  *   (no duplicates).
  * - Network errors → enqueue + retry forever.
  * - HTTP 5xx       → enqueue + retry (server is transiently unhappy).
- * - HTTP 4xx       → drop from queue (won't fix itself: bad token,
- *                    offline mode, no active run, etc.) and surface
- *                    to the caller via the dropped log.
+ * - HTTP 401       → judge link invalid/rotated: keep the item in the
+ *                    queue but mark it `blocked` (never silently
+ *                    dropped; not retried until the same link works
+ *                    again, see `penaltyQueue.unblock`).
+ * - other HTTP 4xx → drop from queue (won't fix itself: offline mode,
+ *                    no active run, etc.) and surface to the caller via
+ *                    the dropped log.
  *
  * Queue state lives in localStorage so a refresh during a flaky run
  * doesn't lose work.
@@ -42,6 +47,8 @@ export interface QueuedSlotSubmit {
   /** Display label for the "Eigene Eingaben" list. */
   label: string;
   queued_at: number;
+  /** Set on 401: kept in storage, skipped by the drain loop. */
+  blocked?: 'unauthorized';
 }
 
 /** Station-token submit (2027 catalogue code, PR 2). */
@@ -54,6 +61,8 @@ export interface QueuedStationSubmit {
   body: StationPenaltyInput;
   label: string;
   queued_at: number;
+  /** Set on 401: kept in storage, skipped by the drain loop. */
+  blocked?: 'unauthorized';
 }
 
 export type QueuedSubmit = QueuedSlotSubmit | QueuedStationSubmit;
@@ -128,6 +137,26 @@ export const penaltyQueue = {
       STORAGE_KEY,
       penaltyQueue.list().filter((i) => i.client_id !== client_id),
     );
+  },
+  /** Enqueue (if missing) and mark as blocked by an invalid judge link. */
+  block(item: QueuedSubmit): void {
+    const items = penaltyQueue.list();
+    const idx = items.findIndex((i) => i.client_id === item.client_id);
+    if (idx >= 0) items[idx] = { ...items[idx]!, blocked: 'unauthorized' };
+    else items.push({ ...item, blocked: 'unauthorized' });
+    write(STORAGE_KEY, items);
+  },
+  /** The link works again → let the drain loop retry its items. */
+  unblock(owner_sub: string, token: string): void {
+    const items = penaltyQueue.list();
+    let changed = false;
+    const next = items.map((i) => {
+      if (!i.blocked || i.owner_sub !== owner_sub || i.token !== token) return i;
+      changed = true;
+      const { blocked: _blocked, ...rest } = i;
+      return rest as QueuedSubmit;
+    });
+    if (changed) write(STORAGE_KEY, next);
   },
   size(): number {
     return penaltyQueue.list().length;
@@ -221,13 +250,23 @@ export async function attemptSubmit(
 export async function drainOnce(): Promise<{
   confirmed: { client_id: string; id: string }[];
   dropped: DroppedSubmit[];
+  /** Items that got a 401 (kept + blocked). Omitted when none. */
+  unauthorized?: QueuedSubmit[];
   remaining: number;
 }> {
   const confirmed: { client_id: string; id: string }[] = [];
   const dropped: DroppedSubmit[] = [];
+  const unauthorized: QueuedSubmit[] = [];
 
   for (const item of penaltyQueue.list()) {
+    if (item.blocked) continue;
     const result = await attemptSubmit(item);
+    if (!result.ok && isInvalidAccessStatus(result.status)) {
+      // Other items may carry another (valid) token → keep going.
+      penaltyQueue.block(item);
+      unauthorized.push(item);
+      continue;
+    }
     if (result.ok) {
       penaltyQueue.remove(item.client_id);
       confirmed.push({ client_id: item.client_id, id: result.id });
@@ -249,7 +288,12 @@ export async function drainOnce(): Promise<{
     break;
   }
 
-  return { confirmed, dropped, remaining: penaltyQueue.size() };
+  return {
+    confirmed,
+    dropped,
+    ...(unauthorized.length > 0 ? { unauthorized } : {}),
+    remaining: penaltyQueue.size(),
+  };
 }
 
 /**
@@ -264,6 +308,8 @@ const DRAIN_INTERVAL_MS = 8_000;
 export function usePenaltyQueue(options?: {
   onConfirmed?: (entry: { client_id: string; id: string }) => void;
   onDropped?: (entry: DroppedSubmit) => void;
+  /** A queued item got a 401 (judge link invalid); it stays queued. */
+  onUnauthorized?: (entry: QueuedSubmit) => void;
 }) {
   // Initial values must match the server render (SSR has neither
   // localStorage nor a meaningful navigator.onLine) — the real values
@@ -295,13 +341,14 @@ export function usePenaltyQueue(options?: {
     let cancelled = false;
     const drain = async () => {
       if (cancelled) return;
-      if (penaltyQueue.size() === 0) return;
+      if (!penaltyQueue.list().some((i) => !i.blocked)) return;
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
       setDraining(true);
       try {
         const res = await drainOnce();
         res.confirmed.forEach((c) => options?.onConfirmed?.(c));
         res.dropped.forEach((d) => options?.onDropped?.(d));
+        res.unauthorized?.forEach((u) => options?.onUnauthorized?.(u));
       } finally {
         if (!cancelled) setDraining(false);
       }

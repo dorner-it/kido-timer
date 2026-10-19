@@ -878,6 +878,17 @@ impl CloudState {
         self.inner.lock().view()
     }
 
+    /// Penalties whose decision comes from the web snapshot (not
+    /// undoable on the desktop).
+    pub fn web_decided_penalty_ids(&self) -> Vec<Uuid> {
+        self.inner
+            .lock()
+            .store
+            .as_ref()
+            .map(|s| s.web_decided_penalty_ids())
+            .unwrap_or_default()
+    }
+
     pub fn divergences(&self) -> DivergenceState {
         self.inner.lock().divergence.clone()
     }

@@ -23,6 +23,7 @@ import {
 } from '../../lib/penalties';
 import { REVIEW_STATUS_LABELS, needsFvConfirmation, penaltyLine } from '../../lib/run-review';
 import { STATION_KINDS, STATION_KIND_LABELS, stationLabel } from '../../lib/stations';
+import { useDialog } from './useDialog';
 
 interface Props {
   data: EventDetailData;
@@ -42,6 +43,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
+  const { confirm, alert, dialog } = useDialog();
 
   // Static catalogue for code → label. Failure is non-fatal: the list
   // falls back to the raw code / reason_code.
@@ -100,9 +102,12 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
     if (
       p &&
       needsFvConfirmation(p) &&
-      !window.confirm(
-        `Fehlversuch bestätigen?\n\n${penaltyLine(p, catalogueIndex)}\n\nDer Lauf wird damit ungültig (keine Zeit).`,
-      )
+      !(await confirm({
+        title: 'Fehlversuch bestätigen?',
+        message: [penaltyLine(p, catalogueIndex), 'Der Lauf wird damit ungültig (keine Zeit).'],
+        confirmLabel: 'Fehlversuch bestätigen',
+        tone: 'danger',
+      }))
     ) {
       return;
     }
@@ -161,11 +166,16 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
       ? `Lauf ${run.run_number} – ${team?.name ?? '?'}`
       : `Lauf ${runId.slice(0, 6)}`;
     const fvCount = pendings.filter((p) => needsFvConfirmation(p)).length;
-    const fvWarning =
-      fvCount > 0 ? `\n\nACHTUNG: ${fvCount} Fehlversuch(e) – der Lauf wird ungültig.` : '';
-    const ok = window.confirm(
-      `Lauf übernehmen?\n\n${header}\n\nFolgende ${pendings.length} offene(n) Fehler werden bestätigt:\n${lines}${fvWarning}`,
-    );
+    const ok = await confirm({
+      title: 'Lauf übernehmen?',
+      message: [
+        header,
+        `Folgende ${pendings.length} offene(n) Fehler werden bestätigt:\n${lines}`,
+        fvCount > 0 ? `ACHTUNG: ${fvCount} Fehlversuch(e) – der Lauf wird ungültig.` : '',
+      ],
+      confirmLabel: 'Übernehmen',
+      tone: fvCount > 0 ? 'danger' : 'default',
+    });
     if (!ok) return;
     setBulkBusy(true);
     try {
@@ -173,12 +183,11 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
       await refresh();
       onChange();
       setError(null);
-      // Soft feedback via the existing error slot so the operator
-      // sees what happened without a toast system.
-      // eslint-disable-next-line no-alert
-      window.alert(
-        `Bestätigt: ${res.approved}, davon ${res.dq} Fehlversuch(e) (FV).`,
-      );
+      // Feedback dialog; not awaited so the busy state resets right away.
+      void alert({
+        title: 'Lauf übernommen',
+        message: `Bestätigt: ${res.approved}, davon ${res.dq} Fehlversuch(e) (FV).`,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Übernehmen fehlgeschlagen');
     } finally {
@@ -395,6 +404,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
           </table>
         </div>
       )}
+      {dialog}
     </section>
   );
 }

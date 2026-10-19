@@ -416,6 +416,7 @@ mod tests {
                 time_source: TimeSource::Handstopp,
                 hand_time_1_ms: Some(47_230),
                 hand_time_2_ms: Some(47_245),
+                penalties_accepted_at: Some(ts()),
                 created_at: ts(),
                 updated_at: ts(),
             }],
@@ -518,6 +519,11 @@ mod tests {
         let run = &json["runs"][0];
         assert_eq!(run["time_source"], "handstopp");
         assert_eq!(run["lineup_confirmed_by"], "startlinie");
+        assert_eq!(
+            run["penalties_accepted_at"],
+            serde_json::to_value(ts()).unwrap(),
+            "Übernehmen timestamp travels in the .kido payload"
+        );
         let pen = &json["approved_penalties"][0];
         assert_eq!(pen["kind"], "fv");
         assert_eq!(pen["station"], "knotengestell");
@@ -599,6 +605,7 @@ mod tests {
             "time_source",
             "hand_time_1_ms",
             "hand_time_2_ms",
+            "penalties_accepted_at",
         ] {
             run.remove(k);
         }
@@ -615,6 +622,7 @@ mod tests {
         let back = verify(&key(), &env).unwrap();
         assert_eq!(back.runs[0].time_source, TimeSource::Lichtschranke);
         assert!(back.runs[0].lineup.is_empty());
+        assert_eq!(back.runs[0].penalties_accepted_at, None);
         // is_disqualification = true in the file → fv.
         assert_eq!(back.approved_penalties[0].kind, PenaltyKind::Fv);
         assert!(back.team_entries[0].wg_history.is_empty());

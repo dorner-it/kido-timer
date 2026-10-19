@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CatalogueItem, DisciplinePayload, OnPremStatus, UploadOutcome } from "../lib/cloudTypes";
+import { onPremWebDecidedPenalties } from "../lib/cloudApi";
 import { t } from "../lib/i18n";
 import { currentRunsOrdered } from "../lib/lanes";
 import { currentPicks, laneCandidates, nextRunForLane, picksToRunIds, withPick } from "../lib/onprem";
@@ -52,6 +53,23 @@ export function OnPremView({
     const id = window.setInterval(() => void onRefreshStatus(), STATUS_POLL_MS);
     return () => window.clearInterval(id);
   }, [onRefreshStatus]);
+
+  // Decisions from the web snapshot are not undoable here; refreshed
+  // whenever the snapshot changes (e.g. after an upload).
+  const [webDecided, setWebDecided] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    let active = true;
+    onPremWebDecidedPenalties()
+      .then((ids) => {
+        if (active) setWebDecided(new Set(ids));
+      })
+      .catch(() => {
+        if (active) setWebDecided(new Set());
+      });
+    return () => {
+      active = false;
+    };
+  }, [snapshot]);
 
   const picks = useMemo(() => currentPicks(snapshot), [snapshot]);
   const current = useMemo(() => currentRunsOrdered(snapshot), [snapshot]);
@@ -164,6 +182,7 @@ export function OnPremView({
                     laneLabel={t.onprem.lane(run.lane ?? i + 1)}
                     catalogue={catalogue}
                     actions={actions}
+                    webDecided={webDecided}
                   />
                 ))}
               </div>
@@ -189,7 +208,13 @@ export function OnPremView({
               </select>
             </label>
             {otherRun && (
-              <RunReviewCard snapshot={snapshot} run={otherRun} catalogue={catalogue} actions={actions} />
+              <RunReviewCard
+                snapshot={snapshot}
+                run={otherRun}
+                catalogue={catalogue}
+                actions={actions}
+                webDecided={webDecided}
+              />
             )}
           </section>
         </div>

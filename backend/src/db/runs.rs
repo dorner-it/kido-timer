@@ -48,6 +48,8 @@ struct RunItem {
     hand_time_1_ms: Option<u32>,
     #[serde(default)]
     hand_time_2_ms: Option<u32>,
+    #[serde(default)]
+    penalties_accepted_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -78,6 +80,7 @@ impl RunItem {
             time_source: r.time_source,
             hand_time_1_ms: r.hand_time_1_ms,
             hand_time_2_ms: r.hand_time_2_ms,
+            penalties_accepted_at: r.penalties_accepted_at,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -103,6 +106,7 @@ impl RunItem {
             time_source: self.time_source,
             hand_time_1_ms: self.hand_time_1_ms,
             hand_time_2_ms: self.hand_time_2_ms,
+            penalties_accepted_at: self.penalties_accepted_at,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -274,6 +278,34 @@ pub async fn update_correction_ms(
     Ok(())
 }
 
+/// "Übernehmen": record when the run's penalties were last accepted.
+pub async fn update_penalties_accepted_at(
+    client: &DbClient,
+    event_id: Uuid,
+    discipline_id: Uuid,
+    run_number: u32,
+    run_id: Uuid,
+    accepted_at: DateTime<Utc>,
+) -> AppResult<()> {
+    let now = Utc::now();
+    client
+        .inner
+        .update_item()
+        .table_name(&client.table_name)
+        .key("PK", AttributeValue::S(keys::event_pk(event_id)))
+        .key(
+            "SK",
+            AttributeValue::S(keys::event_sk_run(discipline_id, run_number, run_id)),
+        )
+        .update_expression("SET penalties_accepted_at = :a, updated_at = :u")
+        .expression_attribute_values(":a", AttributeValue::S(accepted_at.to_rfc3339()))
+        .expression_attribute_values(":u", AttributeValue::S(now.to_rfc3339()))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("dynamodb update_item: {e}")))?;
+    Ok(())
+}
+
 /// Find a run of a discipline by id (the run number, part of the SK, is
 /// not known to callers that only have the id).
 pub async fn find(
@@ -335,6 +367,7 @@ mod tests {
         assert_eq!(r.lineup_confirmed_by, None);
         assert_eq!(r.time_source, TimeSource::Lichtschranke);
         assert_eq!(r.hand_time_1_ms, None);
+        assert_eq!(r.penalties_accepted_at, None);
         assert_eq!(r.original_time_ms, Some(47230));
     }
 
@@ -349,6 +382,7 @@ mod tests {
         r.time_source = TimeSource::Handstopp;
         r.hand_time_1_ms = Some(47230);
         r.hand_time_2_ms = Some(47245);
+        r.penalties_accepted_at = Some("2027-06-12T10:05:00.123Z".parse().unwrap());
         let item: HashMap<String, AttributeValue> =
             serde_dynamo::to_item(RunItem::from_run(&r)).unwrap();
         assert_eq!(

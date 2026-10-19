@@ -265,6 +265,8 @@ export const t = {
     none: "Keine Fehler gemeldet.",
     confirm: "Bestätigen",
     withdraw: "Zurücknehmen",
+    undo: "Rückgängig",
+    undoHint: "Entscheidung zurücksetzen – der Fehler ist wieder offen",
     takeOver: "Übernehmen",
     takeOverTitle: (title: string) => `Lauf übernehmen – ${title}`,
     takeOverAfter: "Ergebnis danach:",

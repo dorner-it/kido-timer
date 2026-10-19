@@ -6,6 +6,7 @@ import { penaltiesForRun, penaltyLabel } from "../lib/penalties";
 import { formatResultTime } from "../lib/results";
 import {
   canReview,
+  canUndoOnDesktop,
   groupByStation,
   needsFvConfirmation,
   PENALTY_KIND_SHORT,
@@ -27,6 +28,8 @@ import { LineupEditor } from "./LineupEditor";
 
 export interface ReviewActions {
   reviewPenalty: (penaltyId: string, approve: boolean) => Promise<boolean>;
+  /** „Rückgängig“: decided → pending (until „Übernehmen“). */
+  undoReview: (penaltyId: string) => Promise<boolean>;
   takeOver: (runId: string) => Promise<boolean>;
   setLineup: (runId: string, runnerIds: string[]) => Promise<boolean>;
   setHandTimes: (runId: string, t1: number, t2: number) => Promise<boolean>;
@@ -40,7 +43,11 @@ interface Props {
   laneLabel?: string | null;
   catalogue: Map<string, CatalogueItem>;
   actions: ReviewActions;
+  /** Penalties whose decision comes from the web snapshot — no „Rückgängig“. */
+  webDecided?: ReadonlySet<string>;
 }
+
+const NO_IDS: ReadonlySet<string> = new Set();
 
 /**
  * Organizer review of one run (on-prem, desktop) — same workflow and
@@ -48,7 +55,14 @@ interface Props {
  * Bestätigen / Zurücknehmen, rejected crossed out, FV with confirmation,
  * "Übernehmen", live summary, hand times and lineup correction.
  */
-export function RunReviewCard({ snapshot, run, laneLabel, catalogue, actions }: Props) {
+export function RunReviewCard({
+  snapshot,
+  run,
+  laneLabel,
+  catalogue,
+  actions,
+  webDecided = NO_IDS,
+}: Props) {
   const penalties = useMemo(() => penaltiesForRun(snapshot, run.id), [snapshot, run.id]);
   const summary = useMemo(() => reviewSummary(penalties), [penalties]);
   const groups = useMemo(() => groupByStation(penalties, catalogue), [penalties, catalogue]);
@@ -66,6 +80,12 @@ export function RunReviewCard({ snapshot, run, laneLabel, catalogue, actions }: 
   const review = async (p: Penalty, approve: boolean) => {
     setBusyId(p.id);
     await actions.reviewPenalty(p.id, approve);
+    setBusyId(null);
+  };
+
+  const undo = async (p: Penalty) => {
+    setBusyId(p.id);
+    await actions.undoReview(p.id);
     setBusyId(null);
   };
 
@@ -152,8 +172,10 @@ export function RunReviewCard({ snapshot, run, laneLabel, catalogue, actions }: 
                     penalty={p}
                     catalogue={catalogue}
                     busy={busyId === p.id}
+                    undoable={canUndoOnDesktop(p, run, webDecided)}
                     onConfirm={() => confirmClick(p)}
                     onWithdraw={() => void review(p, false)}
+                    onUndo={() => void undo(p)}
                   />
                 ))}
               </ul>
@@ -239,18 +261,23 @@ export function SummaryBadge({ summary }: { summary: ReviewSummary }) {
   );
 }
 
-function PenaltyRow({
+export function PenaltyRow({
   penalty: p,
   catalogue,
   busy,
+  undoable = false,
   onConfirm,
   onWithdraw,
+  onUndo,
 }: {
   penalty: Penalty;
   catalogue: Map<string, CatalogueItem>;
   busy: boolean;
+  /** Decided and not frozen by „Übernehmen“ → show „Rückgängig“. */
+  undoable?: boolean;
   onConfirm: () => void;
   onWithdraw: () => void;
+  onUndo?: () => void;
 }) {
   const rejected = p.status === "rejected";
   const fv = p.kind === "fv";
@@ -303,14 +330,27 @@ function PenaltyRow({
           </button>
         </span>
       ) : (
-        <span
-          className={[
-            "rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em]",
-            p.status === "approved" ? "bg-status-confirmed/15 text-status-confirmed" : "bg-ink-50/5 text-ink-300",
-          ].join(" ")}
-          title={p.reviewed_by ?? undefined}
-        >
-          {REVIEW_STATUS_LABELS[p.status]}
+        <span className="inline-flex items-center gap-1">
+          <span
+            className={[
+              "rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em]",
+              p.status === "approved" ? "bg-status-confirmed/15 text-status-confirmed" : "bg-ink-50/5 text-ink-300",
+            ].join(" ")}
+            title={p.reviewed_by ?? undefined}
+          >
+            {REVIEW_STATUS_LABELS[p.status]}
+          </span>
+          {undoable && onUndo && (
+            <button
+              type="button"
+              className="btn px-2 py-1 text-[10px]"
+              disabled={busy}
+              onClick={onUndo}
+              title={t.review.undoHint}
+            >
+              {t.review.undo}
+            </button>
+          )}
         </span>
       )}
     </li>

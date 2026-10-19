@@ -195,11 +195,14 @@ pub struct RunExtras {
     pub lineup: Option<LineupEdit>,
     #[serde(default)]
     pub hand_times: Option<HandTimesEdit>,
+    /// Local "Übernehmen" timestamp (RFC 3339) → `Run.penalties_accepted_at`.
+    #[serde(default)]
+    pub penalties_accepted_at: Option<String>,
 }
 
 impl RunExtras {
     fn is_empty(&self) -> bool {
-        self.lineup.is_none() && self.hand_times.is_none()
+        self.lineup.is_none() && self.hand_times.is_none() && self.penalties_accepted_at.is_none()
     }
 
     /// Drop the parts `run` already reflects.
@@ -209,6 +212,11 @@ impl RunExtras {
         }
         if self.hand_times.as_ref().is_some_and(|h| h.applied_in(run)) {
             self.hand_times = None;
+        }
+        if self.penalties_accepted_at.is_some()
+            && self.penalties_accepted_at == run.penalties_accepted_at
+        {
+            self.penalties_accepted_at = None;
         }
     }
 }
@@ -272,6 +280,9 @@ impl LocalStore {
                 }
                 if let Some(hand) = &extras.hand_times {
                     hand.apply_to(run);
+                }
+                if let Some(at) = &extras.penalties_accepted_at {
+                    run.penalties_accepted_at = Some(at.clone());
                 }
             }
         }
@@ -364,6 +375,18 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Record a local "Übernehmen" of the run's penalties (every press).
+    pub fn set_penalties_accepted_at(&mut self, run_id: Uuid, at: &str) -> Result<(), String> {
+        let run = self.base_run(run_id)?.clone();
+        let extras = self.run_extras.entry(run_id).or_default();
+        extras.penalties_accepted_at = Some(at.to_string());
+        extras.prune(&run);
+        if extras.is_empty() {
+            self.run_extras.remove(&run_id);
+        }
+        Ok(())
+    }
+
     /// Insert / replace a penalty row. A row equal to the base's is not
     /// kept as an edit.
     pub fn upsert_penalty(&mut self, penalty: Penalty) {
@@ -381,6 +404,27 @@ impl LocalStore {
             .get(&id)
             .cloned()
             .or_else(|| self.base.penalties.iter().find(|p| p.id == id).cloned())
+    }
+
+    /// The decision of this penalty comes from the web: the base snapshot
+    /// already has it approved / rejected. Such decisions are not
+    /// undoable on the desktop — the upload never turns a web decision
+    /// back to pending.
+    pub fn is_web_decided(&self, id: Uuid) -> bool {
+        self.base
+            .penalties
+            .iter()
+            .any(|p| p.id == id && p.status != PenaltyStatus::Pending)
+    }
+
+    /// Ids of all penalties whose decision comes from the web.
+    pub fn web_decided_penalty_ids(&self) -> Vec<Uuid> {
+        self.base
+            .penalties
+            .iter()
+            .filter(|p| p.status != PenaltyStatus::Pending)
+            .map(|p| p.id)
+            .collect()
     }
 
     /// The penalty exists only on this desktop (never seen by the web).
@@ -1131,5 +1175,43 @@ mod tests {
         store.upsert_penalty(p);
         store.adopt_remote(sample_payload());
         assert_eq!(store.unsynced_summary().penalties, 1);
+    }
+
+    #[test]
+    fn penalties_accepted_at_overlay_applies_and_prunes() {
+        let mut store = LocalStore::new(sample_payload());
+        store
+            .set_penalties_accepted_at(id(RUN_A1), "2027-06-12T10:05:00.000Z")
+            .unwrap();
+        assert!(store.has_edits());
+        assert_eq!(
+            store.view().runs[0].penalties_accepted_at.as_deref(),
+            Some("2027-06-12T10:05:00.000Z")
+        );
+        assert_eq!(
+            store.base.runs[0].penalties_accepted_at, None,
+            "base untouched"
+        );
+        assert!(store
+            .set_penalties_accepted_at(Uuid::new_v4(), "x")
+            .is_err());
+
+        // The web now has the same value → overlay dropped.
+        let mut remote = sample_payload();
+        remote.runs[0].penalties_accepted_at = Some("2027-06-12T10:05:00.000Z".into());
+        store.adopt_remote(remote);
+        assert!(!store.has_edits());
+    }
+
+    #[test]
+    fn run_extras_without_penalties_accepted_at_still_load() {
+        // Persisted store from a build before "Rückgängig".
+        let extras: RunExtras = serde_json::from_value(serde_json::json!({
+            "lineup": null,
+            "hand_times": { "action": "clear", "keep_time_ms": null }
+        }))
+        .unwrap();
+        assert_eq!(extras.penalties_accepted_at, None);
+        assert!(!extras.is_empty());
     }
 }

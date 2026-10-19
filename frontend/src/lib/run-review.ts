@@ -186,6 +186,43 @@ export function canReview(p: Pick<Penalty, 'status'>): boolean {
   return p.status === 'pending';
 }
 
+/**
+ * Compare two RFC 3339 instants with full sub-millisecond precision (the
+ * backend writes nanoseconds; `Date.parse` alone truncates to ms).
+ * Returns <0, 0, >0. `NaN` when either cannot be parsed.
+ */
+export function compareInstants(a: string, b: string): number {
+  const split = (s: string): [number, string] => {
+    const m = /\.(\d+)/.exec(s);
+    const frac = (m?.[1] ?? '').padEnd(9, '0').slice(0, 9);
+    const secMs = Date.parse(m ? s.replace(m[0], '') : s);
+    return [secMs, frac];
+  };
+  const [sa, fa] = split(a);
+  const [sb, fb] = split(b);
+  if (Number.isNaN(sa) || Number.isNaN(sb)) return Number.NaN;
+  if (sa !== sb) return sa - sb;
+  return fa < fb ? -1 : fa > fb ? 1 : 0;
+}
+
+/**
+ * "Rückgängig" allowed? Mirrors `kido_core::penalty::can_undo_review`:
+ * decided (`approved` / `rejected`) and the run's "Übernehmen" has not
+ * frozen it — `penalties_accepted_at` is null or the decision was made
+ * strictly after it. Penalties approved by Übernehmen share its
+ * timestamp and are therefore not undoable.
+ */
+export function canUndoReview(
+  p: Pick<Penalty, 'status' | 'reviewed_at'>,
+  run: Pick<Run, 'penalties_accepted_at'> | null | undefined,
+): boolean {
+  if (p.status === 'pending') return false;
+  const accepted = run?.penalties_accepted_at ?? null;
+  if (accepted == null) return true;
+  if (p.reviewed_at == null) return false;
+  return compareInstants(p.reviewed_at, accepted) > 0;
+}
+
 /** Confirming an FV needs an explicit confirmation dialog. */
 export function needsFvConfirmation(p: Pick<Penalty, 'kind' | 'is_disqualification'>): boolean {
   return penaltyKind(p) === 'fv';

@@ -11,6 +11,7 @@ import {
   unknownLineupIds,
 } from '../../lib/lineup';
 import { runnerDisplayName } from '../../lib/wg';
+import { useDialog } from './useDialog';
 
 interface Props {
   eventId: string;
@@ -28,6 +29,7 @@ export default function LineupEditor({ eventId, disciplineId, run, roster, onSav
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const { confirm, dialog } = useDialog();
 
   // Follow server updates (e.g. Startlinie confirms) while untouched.
   useEffect(() => {
@@ -41,7 +43,12 @@ export default function LineupEditor({ eventId, disciplineId, run, roster, onSav
     const body = lineupBody(ids, roster);
     if (
       body.runner_ids.length === 0 &&
-      !window.confirm('Besetzung leeren? Der Tagessieger nutzt dann den ganzen Kader.')
+      !(await confirm({
+        title: 'Besetzung leeren?',
+        message: 'Es ist kein Läufer ausgewählt. Der Tagessieger nutzt dann den ganzen Kader.',
+        confirmLabel: 'Besetzung leeren',
+        tone: 'danger',
+      }))
     ) {
       return;
     }
@@ -132,6 +139,7 @@ export default function LineupEditor({ eventId, disciplineId, run, roster, onSav
           </button>
         </div>
       </div>
+      {dialog}
     </div>
   );
 }

@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "migrate_timer_mode"
 path = "src/bin/migrate_timer_mode.rs"
 
+[[bin]]
+name = "migrate_runner_keys"
+path = "src/bin/migrate_runner_keys.rs"
+
 [dependencies]
 argon2 = "0.5"
 aws-config = { version = "1", features = ["behavior-version-latest"] }

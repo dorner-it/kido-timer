@@ -57,6 +57,8 @@ pub async fn create(
         created_at: now,
         updated_at: now,
     };
+    // The key contains the runner id, so an occupied position is fine:
+    // both runners are kept (listed by position, then name).
     runners::put(&state.db, &runner).await?;
     Ok((StatusCode::CREATED, Json(runner)))
 }
@@ -70,16 +72,13 @@ pub async fn update(
     require_owned(&state, &auth, event_id).await?;
     validate(&input)?;
 
-    let existing = runners::list_for_team(&state.db, event_id, team_id)
-        .await?
+    let stored = runners::list_stored_for_team(&state.db, event_id, team_id).await?;
+    let existing = runners::normalize(stored.clone())
         .into_iter()
         .find(|r| r.id == runner_id)
         .ok_or_else(|| AppError::NotFound(format!("runner {runner_id}")))?;
 
-    if existing.position != input.position {
-        runners::delete(&state.db, &existing).await?;
-    }
-
+    let now = Utc::now();
     let runner = Runner {
         id: runner_id,
         team_id,
@@ -92,9 +91,14 @@ pub async fn update(
         // one so PUT bodies that omit the field don't wipe legacy values.
         gender: input.gender.or(existing.gender),
         created_at: existing.created_at,
-        updated_at: Utc::now(),
+        updated_at: now,
     };
-    runners::put(&state.db, &runner).await?;
+    // Moving onto an occupied position swaps: the runner(s) there take
+    // this runner's old position. Old/legacy keys are removed and the new
+    // ones written in one transaction (see `runners::plan_update`). The
+    // response is only the moved runner — the UI reloads the roster.
+    let writes = runners::plan_update(&stored, &runner, now)?;
+    runners::apply_atomic(&state.db, event_id, &writes).await?;
     Ok(Json(runner))
 }
 

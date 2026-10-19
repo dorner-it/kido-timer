@@ -9,8 +9,10 @@ import {
   type ApiKeySummary,
 } from '../../lib/api';
 import { formatDateDE } from '../../lib/format';
+import { useDialog } from './useDialog';
 
 export default function UserSettings() {
+  const { confirm, dialog } = useDialog();
   const [keys, setKeys] = useState<ApiKeySummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -52,7 +54,16 @@ export default function UserSettings() {
   };
 
   const revoke = async (key: ApiKeySummary) => {
-    if (!confirm(`Schlüssel „${key.name}" (${key.prefix}…) widerrufen?`)) return;
+    const ok = await confirm({
+      title: 'API-Schlüssel widerrufen?',
+      message: [
+        `„${key.name}“ (${key.prefix}…) wird widerrufen.`,
+        'Desktop-Installationen mit diesem Schlüssel können danach keine Daten mehr abrufen.',
+      ],
+      confirmLabel: 'Widerrufen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiClient.apiKeys.revoke(key.key_id);
       await refresh();
@@ -163,6 +174,7 @@ export default function UserSettings() {
           </ul>
         )}
       </section>
+      {dialog}
     </main>
   );
 }

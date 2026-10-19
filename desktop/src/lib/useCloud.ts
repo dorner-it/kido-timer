@@ -30,6 +30,7 @@ import {
   onPremSetLineup,
   onPremStatus,
   onPremTakeOver,
+  onPremUndoReview,
   pickKidoFile,
   type RecordLaneArgs,
 } from "./cloudApi";
@@ -472,6 +473,10 @@ export function useCloud() {
       organizer(() => onPremReviewPenalty(penaltyId, approve)),
     [organizer],
   );
+  const undoReview = useCallback(
+    (penaltyId: string) => organizer(() => onPremUndoReview(penaltyId)),
+    [organizer],
+  );
   const takeOver = useCallback(
     (runId: string) => organizer(() => onPremTakeOver(runId)),
     [organizer],
@@ -523,6 +528,7 @@ export function useCloud() {
     rotateOnPremToken,
     setCurrentRuns,
     reviewPenalty,
+    undoReview,
     takeOver,
     setLineup,
     setHandTimes,

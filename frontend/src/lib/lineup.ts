@@ -208,6 +208,24 @@ export function rosterForTeam<T extends Pick<Runner, 'team_id' | 'position' | 'l
     );
 }
 
+/**
+ * All rosters of an event, keyed by team id, each in roster order
+ * (position, then name). Positions are not unique — a runner created at
+ * an occupied position sits next to the other one, ordered by name.
+ */
+export function rostersByTeam<T extends RosterRunnerLike & Pick<Runner, 'team_id'>>(
+  runners: readonly T[],
+): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const r of runners) {
+    const list = m.get(r.team_id) ?? [];
+    list.push(r);
+    m.set(r.team_id, list);
+  }
+  for (const [team, list] of m) m.set(team, sortRoster(list));
+  return m;
+}
+
 /** Tick / untick one runner. */
 export function toggleLineup(ids: readonly string[], runnerId: string): string[] {
   return ids.includes(runnerId) ? ids.filter((id) => id !== runnerId) : [...ids, runnerId];

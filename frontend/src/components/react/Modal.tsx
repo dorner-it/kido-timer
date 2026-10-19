@@ -8,10 +8,12 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   tone?: 'default' | 'danger';
+  /** Tailwind z-index class of the overlay (dialogs stacked on top use z-50). */
+  layer?: string;
 }
 
 /** Minimal accessible modal (Escape / backdrop closes). */
-export function Modal({ title, onClose, children, footer, tone = 'default' }: ModalProps) {
+export function Modal({ title, onClose, children, footer, tone = 'default', layer = 'z-40' }: ModalProps) {
   const titleId = useId();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -23,7 +25,7 @@ export function Modal({ title, onClose, children, footer, tone = 'default' }: Mo
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-ink-50/40 p-4"
+      className={`fixed inset-0 ${layer} flex items-center justify-center bg-ink-50/40 p-4`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

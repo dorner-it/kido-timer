@@ -22,6 +22,7 @@ import { wgLabel, WG_MISSING_LABEL } from '../../lib/wg';
 import CurrentRunsControl from './CurrentRunsControl';
 import RunReviewCard, { LineupMissingBadge, SummaryBadge } from './RunReviewCard';
 import { RunTime } from './RunTime';
+import { useDialog } from './useDialog';
 
 interface Props {
   data: EventDetailData;
@@ -320,6 +321,7 @@ function RunsList({
 }) {
   const [teamId, setTeamId] = useState('');
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useDialog();
   const sortedEntries = useMemo(() => [...entries].sort((a, b) => a.start_number - b.start_number), [entries]);
   const teamName = (id: string) => teams.find((t) => t.id === id)?.name ?? 'Unbekannte Mannschaft';
 
@@ -340,8 +342,13 @@ function RunsList({
 
   const createRound = async () => {
     const bodies = roundBodies(entries, runs, laneCount);
-    if (bodies.length === 0) return;
-    if (!window.confirm(`Durchgang anlegen: ${bodies.length} Läufe (einer je Meldung, nach Startnummer)?`)) return;
+    if (busy || bodies.length === 0) return;
+    const ok = await confirm({
+      title: 'Durchgang anlegen?',
+      message: `Es werden ${bodies.length} Läufe angelegt (einer je Meldung, nach Startnummer).`,
+      confirmLabel: 'Durchgang anlegen',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       for (const b of bodies) {
@@ -492,6 +499,7 @@ function RunsList({
           </table>
         </div>
       )}
+      {dialog}
     </section>
   );
 }

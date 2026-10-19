@@ -487,6 +487,7 @@ mod tests {
             time_source: TimeSource::Lichtschranke,
             hand_time_1_ms: None,
             hand_time_2_ms: None,
+            penalties_accepted_at: None,
             created_at: ts(),
             updated_at: ts(),
         }
