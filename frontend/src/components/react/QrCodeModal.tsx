@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useSyncExternalStore } from 'react';
 
 import { qrSvg } from '../../lib/qr-svg';
 import { Modal } from './Modal';
@@ -23,6 +23,7 @@ export function QrCodeModal({
     <Modal
       title={title}
       onClose={onClose}
+      layer="z-[60]"
       footer={
         <button type="button" className="btn btn-primary" onClick={onClose} autoFocus>
           Schließen
@@ -43,21 +44,47 @@ export function QrCodeModal({
   );
 }
 
+/**
+ * Only one QR code is open at a time, page-wide: opening another one
+ * replaces the current one. Module state shared by every
+ * {@link QrIconButton} of the React root (one per Astro island).
+ */
+let activeQr: string | null = null;
+const listeners = new Set<() => void>();
+
+export const qrStore = {
+  get: (): string | null => activeQr,
+  open(id: string): void {
+    activeQr = id;
+    listeners.forEach((l) => l());
+  },
+  close(id: string): void {
+    if (activeQr !== id) return;
+    activeQr = null;
+    listeners.forEach((l) => l());
+  },
+  subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  },
+};
+
 /** Small QR icon button next to copy/open; opens {@link QrCodeModal}. */
 export function QrIconButton({ title, url }: { title: string; url: string }) {
-  const [open, setOpen] = useState(false);
+  const id = useId();
+  const active = useSyncExternalStore(qrStore.subscribe, qrStore.get, () => null);
   return (
     <>
       <button
         type="button"
         className="btn"
-        onClick={() => setOpen(true)}
+        onClick={() => qrStore.open(id)}
         aria-label={`QR-Code anzeigen: ${title}`}
         title="QR-Code anzeigen"
       >
         <QrIcon />
       </button>
-      {open && <QrCodeModal title={title} url={url} onClose={() => setOpen(false)} />}
+      {active === id && <QrCodeModal title={title} url={url} onClose={() => qrStore.close(id)} />}
     </>
   );
 }

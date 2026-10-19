@@ -31,3 +31,30 @@ describe('QrCodeModal', () => {
     expect(html).toContain('Schließen');
   });
 });
+
+describe('qrStore (one QR code at a time)', () => {
+  it('opening another QR replaces the current one', async () => {
+    const { qrStore } = await import('../QrCodeModal');
+    const seen: (string | null)[] = [];
+    const unsub = qrStore.subscribe(() => seen.push(qrStore.get()));
+    qrStore.open('a');
+    qrStore.open('b');
+    expect(qrStore.get()).toBe('b');
+    qrStore.close('a'); // stale close of a replaced QR is ignored
+    expect(qrStore.get()).toBe('b');
+    qrStore.close('b');
+    expect(qrStore.get()).toBeNull();
+    expect(seen).toEqual(['a', 'b', null]);
+    unsub();
+  });
+});
+
+describe('toBody (overlays outside the opening card)', () => {
+  it('renders in place without a document (server / SSR)', async () => {
+    const { toBody } = await import('../portal');
+    const node = h('span', null, 'x');
+    expect(typeof document).toBe('undefined');
+    expect(toBody(node)).toBe(node);
+    expect(toBody(null)).toBeNull();
+  });
+});
