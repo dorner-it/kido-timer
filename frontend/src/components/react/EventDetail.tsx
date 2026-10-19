@@ -26,8 +26,9 @@ import { disciplineFormSchema, fieldErrors } from '../../lib/schemas';
 import TeamRoster from './TeamRoster';
 import PenaltiesPanel from './PenaltiesPanel';
 import EntriesPanel from './EntriesPanel';
+import RunsPanel from './RunsPanel';
 
-type Tab = 'disciplines' | 'roster' | 'entries' | 'penalties' | 'deciders';
+type Tab = 'disciplines' | 'roster' | 'entries' | 'runs' | 'penalties' | 'deciders';
 
 interface Props {
   id: string;
@@ -135,6 +136,9 @@ export default function EventDetail({ id }: Props) {
         <TabButton active={tab === 'entries'} onClick={() => setTab('entries')}>
           Meldungen
         </TabButton>
+        <TabButton active={tab === 'runs'} onClick={() => setTab('runs')}>
+          Läufe & Prüfung
+        </TabButton>
         <TabButton active={tab === 'penalties'} onClick={() => setTab('penalties')}>
           Strafen
         </TabButton>
@@ -148,6 +152,7 @@ export default function EventDetail({ id }: Props) {
       )}
       {tab === 'roster' && <TeamRoster data={data} onChange={refresh} />}
       {tab === 'entries' && <EntriesPanel data={data} onChange={refresh} />}
+      {tab === 'runs' && <RunsPanel data={data} onChange={refresh} />}
       {tab === 'penalties' && <PenaltiesPanel data={data} onChange={refresh} />}
       {tab === 'deciders' && <DecidersPanel data={data} onChange={refresh} />}
     </main>
@@ -391,6 +396,9 @@ function DisciplineCard({
         >
           {exporting ? '⏳' : '⇩'} .kido
         </button>
+        <a className="btn" href={`/events/${event_id}/disciplines/${discipline.id}/results`}>
+          Ergebnisse
+        </a>
         <button type="button" className="btn" onClick={() => setEditing((v) => !v)}>
           {editing ? 'Schließen' : 'Bearbeiten'}
         </button>

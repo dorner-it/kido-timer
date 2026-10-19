@@ -32,6 +32,7 @@ fn events_router() -> Router<AppState> {
         .merge(routes::team_entries::router())
         .merge(routes::runs::router())
         .merge(routes::penalties::router())
+        .merge(routes::results::router())
 }
 
 /// 410 GONE for the v1 `/api/competitions/...` and

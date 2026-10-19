@@ -11,6 +11,7 @@ import {
   normalizeStationState,
   normalizeTeamEntry,
 } from './schemas';
+import { normalizeResults } from './results';
 import type { StationKind } from './stations';
 import { getApiBase } from './api-base';
 
@@ -717,6 +718,15 @@ export const apiClient = {
       request<BulkApproveResponse>(
         `/api/events/${event_id}/runs/${run_id}/penalties/bulk-approve`,
         { method: 'POST' },
+      ),
+  },
+  results: {
+    /** WG rankings + Tagessieger of one discipline (docs/api.md § Results). */
+    get: async (event_id: string, discipline_id: string) =>
+      normalizeResults(
+        await request<unknown>(
+          `/api/events/${event_id}/disciplines/${discipline_id}/results`,
+        ),
       ),
   },
   catalogue: {
