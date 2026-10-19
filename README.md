@@ -1,4 +1,6 @@
-# KI-DO Timer Web
+# KI-DO Timer
+
+Monorepo for the KI-DO Timer: web backend, web frontend and the desktop timer console.
 
 Web companion for **TRV Kocab timer** competitions used by fire-department running disciplines (Löschangriff, Staffellauf, …). The web app handles organizer-side preparation, penalty submission via static QR codes from up to four Strafrichter, and exposes an export feed consumed by the standalone ki-do.it desktop application.
 
@@ -17,6 +19,12 @@ make frontend-dev       # astro dev (:4321)
 make frontend-build     # astro build → dist/
 make frontend-check     # astro check + tsc --noEmit
 
+make desktop-install    # npm ci in desktop/
+make desktop-dev        # tauri dev
+make desktop-check      # tsc + vite build + cargo check/test
+
+make check-all          # backend + frontend + desktop checks/tests
+
 make tf-fmt             # terraform fmt -recursive -check
 make tf-validate        # terraform validate (requires tf-init first)
 
@@ -26,6 +34,7 @@ make dynamodb-down
 
 ## Layout
 
+- `desktop/` — Tauri 2 desktop app (React + Rust) that reads the TRV Kocab timer over RS232; see [`desktop/README.md`](./desktop/README.md). Released via tag `desktop-vX.Y.Z`.
 - `backend/` — Rust + axum, deployed as a single AWS Lambda (ARM64 musl).
 - `frontend/` — Astro 4 + React 18 islands + Tailwind, deployed to Vercel.
 - `infrastructure/` — Terraform: DynamoDB single table, Lambda, API Gateway HTTP API, Secrets Manager, CloudWatch.

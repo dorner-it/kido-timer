@@ -31,7 +31,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/dorner-it/kido-timer-app/releases/latest/download/latest.json"
+        "https://github.com/dorner-it/kido-timer/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxODEwRkMzRjk3NzJBOTUKUldTVktuZjV3dytCZ1NVbVFrK0MxZmdJMWM4ZU1rSkhCUC8rb1JDd0xiSzVFQlZhRTdoN0tvaUwK"
     }

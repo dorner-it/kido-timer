@@ -1,6 +1,7 @@
 .PHONY: setup \
 	backend-dev backend-test backend-build backend-check \
 	frontend-install frontend-dev frontend-build frontend-check \
+	desktop-install desktop-dev desktop-check check-all \
 	lint fmt \
 	tf-init tf-fmt tf-validate tf-plan tf-apply \
 	dynamodb-up dynamodb-down
@@ -37,6 +38,20 @@ frontend-build:
 
 frontend-check:
 	cd frontend && npm run check
+
+# ----- desktop -----
+
+desktop-install:
+	cd desktop && npm ci
+
+desktop-dev:
+	cd desktop && npx tauri dev
+
+desktop-check:
+	cd desktop && npm run build
+	cd desktop/src-tauri && cargo check --all-targets && cargo test
+
+check-all: backend-check backend-test frontend-check frontend-build desktop-check
 
 # ----- quality -----
 

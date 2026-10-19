@@ -147,6 +147,7 @@ mod tests {
                 is_active: true,
                 current_discipline_id: Some(discipline_id),
                 current_run_id: None,
+                station_token: None,
                 created_at: None,
                 updated_at: None,
             },
