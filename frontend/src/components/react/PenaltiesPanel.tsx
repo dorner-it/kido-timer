@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
-  PENALTY_STATUS_LABELS,
   apiClient,
   type CatalogueEntry,
   type EventDetail as EventDetailData,
@@ -22,6 +21,7 @@ import {
   penaltyKindBadgeClasses,
   penaltySummaryLine,
 } from '../../lib/penalties';
+import { REVIEW_STATUS_LABELS, needsFvConfirmation, penaltyLine } from '../../lib/run-review';
 import { STATION_KINDS, STATION_KIND_LABELS, stationLabel } from '../../lib/stations';
 
 interface Props {
@@ -96,13 +96,23 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
   const runById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
 
   const approve = async (id: string) => {
+    const p = list?.find((x) => x.id === id);
+    if (
+      p &&
+      needsFvConfirmation(p) &&
+      !window.confirm(
+        `Fehlversuch bestätigen?\n\n${penaltyLine(p, catalogueIndex)}\n\nDer Lauf wird damit ungültig (keine Zeit).`,
+      )
+    ) {
+      return;
+    }
     setBusyId(id);
     try {
       await apiClient.penalties.approve(event.id, id);
       await refresh();
       onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Genehmigen fehlgeschlagen');
+      setError(e instanceof Error ? e.message : 'Bestätigen fehlgeschlagen');
     } finally {
       setBusyId(null);
     }
@@ -115,13 +125,13 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
       await refresh();
       onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ablehnen fehlgeschlagen');
+      setError(e instanceof Error ? e.message : 'Zurücknehmen fehlgeschlagen');
     } finally {
       setBusyId(null);
     }
   };
 
-  // "Lauf abschließen" — bulk-approve every pending penalty for one
+  // "Übernehmen" — bulk-approve every pending penalty for one
   // run. Groups the current list by run_id (after every filter the
   // operator already chose) and presents one button per run with
   // pending rows.
@@ -150,8 +160,11 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
     const header = run
       ? `Lauf ${run.run_number} – ${team?.name ?? '?'}`
       : `Lauf ${runId.slice(0, 6)}`;
+    const fvCount = pendings.filter((p) => needsFvConfirmation(p)).length;
+    const fvWarning =
+      fvCount > 0 ? `\n\nACHTUNG: ${fvCount} Fehlversuch(e) – der Lauf wird ungültig.` : '';
     const ok = window.confirm(
-      `Lauf abschließen?\n\n${header}\n\nFolgende ${pendings.length} ausstehende Strafe(n) werden genehmigt:\n${lines}`,
+      `Lauf übernehmen?\n\n${header}\n\nFolgende ${pendings.length} offene(n) Fehler werden bestätigt:\n${lines}${fvWarning}`,
     );
     if (!ok) return;
     setBulkBusy(true);
@@ -164,10 +177,10 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
       // sees what happened without a toast system.
       // eslint-disable-next-line no-alert
       window.alert(
-        `Genehmigt: ${res.approved}, davon ${res.dq} Fehlversuch(e) (FV).`,
+        `Bestätigt: ${res.approved}, davon ${res.dq} Fehlversuch(e) (FV).`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Lauf-Abschluss fehlgeschlagen');
+      setError(e instanceof Error ? e.message : 'Übernehmen fehlgeschlagen');
     } finally {
       setBulkBusy(false);
     }
@@ -177,8 +190,8 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
     <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <p className="font-mono text-[12px] text-ink-200">
-          Strafrichter-Einreichungen. Genehmigte Strafen fließen automatisch in
-          die Korrekturzeit der zugehörigen Läufe ein.
+          Alle Fehlermeldungen der Wertungsrichter. Zurückgenommene Fehler bleiben
+          durchgestrichen sichtbar. Prüfung pro Lauf im Tab „Läufe &amp; Prüfung".
         </p>
         <div className="flex gap-2">
           <div className="field">
@@ -194,7 +207,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
               <option value="all">Alle</option>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {PENALTY_STATUS_LABELS[s]}
+                  {REVIEW_STATUS_LABELS[s]}
                 </option>
               ))}
             </select>
@@ -244,10 +257,10 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
         <div className="surface flex flex-wrap items-center justify-between gap-3 px-5 py-3">
           <p className="font-mono text-[12px] text-ink-200">
             {pendingByRun.size === 1
-              ? '1 Lauf mit ausstehenden Strafen.'
-              : `${pendingByRun.size} Läufe mit ausstehenden Strafen.`}{' '}
-            Mit „Lauf abschließen" werden alle pendings eines Laufs auf einmal
-            genehmigt.
+              ? '1 Lauf mit offenen Fehlern.'
+              : `${pendingByRun.size} Läufe mit offenen Fehlern.`}{' '}
+            Mit „Übernehmen" werden alle offenen Fehler eines Laufs auf einmal
+            bestätigt.
           </p>
           <div className="flex flex-wrap gap-2">
             {Array.from(pendingByRun.entries()).map(([runId, pendings]) => {
@@ -262,7 +275,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                   onClick={() => bulkApprove(runId)}
                 >
                   Lauf {run?.run_number ?? '?'} – {team?.name ?? '?'}{' '}
-                  abschließen ({pendings.length})
+                  übernehmen ({pendings.length})
                 </button>
               );
             })}
@@ -278,7 +291,7 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
         <p className="label">Lade …</p>
       ) : list.length === 0 ? (
         <p className="surface px-5 py-4 text-[13px] text-ink-200">
-          Keine Strafen mit diesem Filter.
+          Keine Fehler mit diesem Filter.
         </p>
       ) : (
         <div className="surface overflow-hidden">
@@ -305,7 +318,13 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                 return (
                   <tr
                     key={p.id}
-                    className="border-b border-[color:var(--hairline-color)] last:border-0"
+                    className={[
+                      'border-b border-[color:var(--hairline-color)] last:border-0',
+                      p.status === 'rejected' ? 'text-ink-300 line-through opacity-60' : '',
+                      penaltyKind(p) === 'fv' && p.status !== 'rejected'
+                        ? 'bg-status-unknown/5'
+                        : '',
+                    ].join(' ')}
                   >
                     <Td className="font-mono text-[11px] text-ink-200">
                       {formatDateTime(p.created_at)}
@@ -347,6 +366,8 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                             className="btn btn-confirm"
                             disabled={busyId === p.id}
                             onClick={() => approve(p.id)}
+                            title="Bestätigen"
+                            aria-label="Bestätigen"
                           >
                             ✓
                           </button>
@@ -355,6 +376,8 @@ export default function PenaltiesPanel({ data, onChange }: Props) {
                             className="btn btn-danger"
                             disabled={busyId === p.id}
                             onClick={() => reject(p.id)}
+                            title="Zurücknehmen"
+                            aria-label="Zurücknehmen"
                           >
                             ✕
                           </button>
@@ -429,7 +452,7 @@ function StatusPill({ status }: { status: PenaltyStatus }) {
   return (
     <span className={`pill ${cls}`}>
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {PENALTY_STATUS_LABELS[status]}
+      {REVIEW_STATUS_LABELS[status]}
     </span>
   );
 }
