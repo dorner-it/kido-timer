@@ -180,7 +180,8 @@ kido-timer/
 - `location`: Option<String>
 - `mode`: `TimerMode` (see 4.2)
 - `is_active`: bool — exactly **zero or one** competition per user is active at a time. The decider page reads the active competition.
-- `current_run_id`: Option<UUID> — points at the `Run` currently on the lane (set by organizer)
+- `current_run_ids`: Vec<UUID> — the `Run`s currently being timed, one per active lane (max the discipline's `lane_count`; set by organizer). Legacy rows without it read as `[current_run_id]`.
+- `current_run_id`: Option<UUID> — **legacy** mirror of `current_run_ids[0]`, kept for old clients
 - `decider_tokens`: array of 4 opaque tokens, one per slot. Used in QR URLs. Rotatable.
 - `created_at`, `updated_at`
 
@@ -198,6 +199,13 @@ kido-timer/
 - `last_name`: String
 - `birth_date`: `NaiveDate`
 - `position`: u32 (running order within team)
+- `gender`: Option — **legacy**, optional, no longer written by the UI (no gender logic; the Wertungsgruppe is ticked by the club)
+
+**TeamEntry (Meldung)**
+- `team_id`, `discipline_id`, `start_number`, `lane`: Option<u8> (1..=`Discipline.lane_count`)
+- `wg`: Option<`Wertungsgruppe`> (`wg1`…`wg5`) — **input** ticked by the club, required on every write, never derived; `None` only on legacy rows
+- `wg_history`: append-only `[{ from, to, by, at, note }]`, written by "Umsetzen" (`POST …/entries/:team_id/move-wg`)
+- `wg_warnings`: computed on every read (`kido_core::wg::check_roster`, event year), never stored
 
 **Run**
 - `id`: UUID — one row per timing result (matches the desktop app's `RunEntry` concept: a confirmed time on a lane).
@@ -205,10 +213,12 @@ kido-timer/
 - `team_id`: UUID
 - `runner_id`: Option<UUID> (typically `None` — the team runs as a unit on both v3 modes)
 - `run_number`: u32 (1-indexed; e.g. heat 1, heat 2 of the same team)
-- `lane`: Option<u8> (1..=`TimerMode.lane_count()`; 1..=2 for Gruppenstaffette, 1..=4 for Löschangriff)
+- `lane`: Option<u8> (1..=`Discipline.lane_count`; 1 or 2 for Gruppenstaffette, 4 for Löschangriff)
 - `status`: enum `Pending | Active | Completed | Cancelled`. Exactly zero or one `Active` run per competition.
-- `original_time_ms`: Option<u32> — set by the desktop app on result import or manually by the organizer.
-- `correction_ms`: i32 — denormalized sum of approved penalties' `delta_ms`, kept on the run row for fast display.
+- `original_time_ms`: Option<u32> — set by the desktop app on result import or manually by the organizer; with hand times = their mean rounded to 1/100 s.
+- `correction_ms`: i32 — denormalized sum of approved penalties' `delta_ms`, kept on the run row for fast display (reset to 0 when hand times are entered).
+- `lineup`: Vec<UUID> — runners who actually ran (subset of the team roster); `lineup_confirmed_at` / `lineup_confirmed_by` (`startlinie` | `organizer`).
+- `time_source`: `Lichtschranke` (default) | `Handstopp`; `hand_time_1_ms`, `hand_time_2_ms`: Option<u32> (only when the light barrier failed).
 - `started_at`, `ended_at`: Option<timestamp>
 - `created_at`, `updated_at`
 
@@ -218,8 +228,12 @@ kido-timer/
 - `run_id`: UUID — penalties always attach to a specific Run (a team running heat 1 vs heat 2 has separate penalty buckets).
 - `team_id`: UUID (denormalized from the run for query convenience).
 - `runner_id`: Option<UUID> (inherited from the run).
-- `decider_slot`: u8 (1..=4)
-- `delta_ms`: i32 — milliseconds added to the run's correction. Negative values are allowed for organizer corrections. Maps directly onto the desktop app's `RunEntry.correctionMs`.
+- `decider_slot`: u8 (1..=4; **deprecated**, 0 in the station flow)
+- `kind`: `Sz` (+15 s) | `Fv` (run invalid). Legacy rows without it read as `is_disqualification ? Fv : Sz`.
+- `code`: Option<String> — catalogue code from `kido_core::catalogue` (`"<station>.<slug>"`); `None` on legacy rows and the legacy slot route.
+- `station`: Option<`StationKind`> — canonical key (`startlinie`, `verteilerlinie`, `strahlrohrlinie`, `knotengestell`, `angriffslinie`, `podest`); legacy keys still readable.
+- `is_disqualification`: bool — output-only mirror of `kind == Fv` for old clients.
+- `delta_ms`: i32 — milliseconds added to the run's correction: catalogue SZ → 15000, FV → 0; legacy rows / slot route keep the value as sent. Maps directly onto the desktop app's `RunEntry.correctionMs`.
 - `reason_code`: Option<String> (controlled vocabulary, configurable later — start with free-text optional)
 - `status`: enum `Pending | Approved | Rejected`
 - `created_at`: timestamp
@@ -228,13 +242,19 @@ kido-timer/
 
 ### 4.2 TimerMode
 
-v3 (current). Discipline-specific — lane count is intrinsic to the variant.
+v3 (current). Discipline-specific. The shared enums (`TimerMode`,
+`JudgeMode`, `SyncMode`, `StationKind`, `PenaltyKind`, `PenaltyStatus`,
+`TimeSource`, `Wertungsgruppe`) live in `crates/kido-core` and are
+re-exported by `backend/src/models/*`. The lanes actually used are set
+per discipline (`Discipline.lane_count`: Gruppenstaffette 1 | 2, default
+2; Löschangriff 4), as is `judge_mode` (`per_station` |
+`per_station_and_lane`).
 
 ```rust
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimerMode {
-    Gruppenstaffette,  // 2 lanes, group-vs-group relay format
+    Gruppenstaffette,  // 1 or 2 lanes, group-vs-group relay format
     Loeschangriff,     // 4 lanes, classic fire-attack discipline
 }
 ```
@@ -362,7 +382,7 @@ The frontend reads owner/slot/token, then talks to:
 | GET    | `/api/export/competitions/:id`                | Full competition snapshot (JSON)       |
 | GET    | `/api/export/competitions/:id/penalties`      | Approved penalties only                |
 
-Export JSON shape is **stable** and versioned via top-level `"schema_version": 1`. Document any change in `docs/api.md` and bump the version.
+Export JSON shape is **stable** and versioned via top-level `"schema_version"` (currently `4`, Gruppenstafette 2027). Document any change in `docs/api.md` / `docs/desktop-integration.md` and bump the version.
 
 ---
 
@@ -485,7 +505,7 @@ The desktop app at ki-do.it expects to call `/api/export/competitions/:id` and r
 
 ```jsonc
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "competition": {
     "id": "…",
     "name": "…",
@@ -535,11 +555,11 @@ When invoked in an empty directory with this file present:
 - **Penalty granularity:** penalties attach to a `Run` row (a team running multiple heats has separate penalty buckets). Run mirrors the desktop app's `RunEntry` (`originalTimeMs` + `correctionMs`).
 - **AWS account & infra:** same account as `../fms/` (eu-central-1, state bucket `dorner-it-fms-terraform-state`, lock table `fms-terraform-locks`).
 - **CI:** Terraform plan/apply runs from GitHub Actions via OIDC. Lambda deploy runs from GitHub Actions on `backend/**` changes.
+- **Penalty vocabulary:** fixed error catalogue per station (`kido_core::catalogue`, served at `GET /api/catalogue`); penalties carry `kind` (SZ/FV) + `code`. Free-text `reason_code` is legacy. Decided 2026-10-16.
 - **GitHub repo:** `dorner-it/kido-timer` (public monorepo since 2026-10-16; merged from `dorner-it/ki-do-timer-web` + `dorner-it/kido-timer-app`, both histories preserved). Desktop releases are tagged `desktop-vX.Y.Z` and published here; the Tauri updater reads `releases/latest/download/latest.json` of this repo.
 
 ### Still open
 
-- **Reason-code vocabulary** for penalties (free-text in v1; replace with controlled vocabulary later).
 - **Vercel domain(s)** for CORS and Cognito callback/logout URLs (`callback_urls` / `logout_urls`) — needed before first prod apply.
 - **Cognito Hosted UI domain prefix** — must be globally unique within the AWS region (e.g. `auth-ki-do-it`). Required input before first apply.
 - **Whether the desktop app fetches once and caches, or polls during the event** (affects cache headers and ETag use).

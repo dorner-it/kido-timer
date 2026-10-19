@@ -31,7 +31,7 @@ A `.kido` file is a UTF-8 JSON document containing a tamper-evident envelope:
 
 ```jsonc
 {
-  "v": 3,                                  // envelope version (matches schema_version)
+  "v": 4,                                  // envelope version (matches schema_version)
   "alg": "HS256",                          // HMAC-SHA256, fixed
   "owner_sub": "<cognito-sub>",            // tenant identifier
   "issued_at": "2026-05-06T10:13:00Z",     // RFC 3339 UTC
@@ -46,6 +46,13 @@ Schema history:
 - **v3**: replaced the generic `TimerMode` with discipline-specific
   `gruppenstaffette` (2 lanes) and `loeschangriff` (4 lanes). Old values
   are rejected with `400 validation`.
+- **v4** (2026-10, Gruppenstafette 2027): Discipline `lane_count` /
+  `judge_mode`, Event `current_run_ids`, Run `lineup*` / `time_source` /
+  `hand_time_*`, TeamEntry `wg` (input) + `wg_history`, Penalty `kind` /
+  `code` and canonical station keys — see §2.5. The web imports v4
+  only; v3 files are rejected with `400 validation` ("veraltetes Schema
+  v3 … erwartet v4"). The desktop app is still on v2 and catches up in a
+  later PR.
 
 ### 2.1 Signing rule
 
@@ -60,13 +67,18 @@ sig = base64url_no_pad(
 
 The MAC covers the **base64 string** of the payload, not the raw JSON, so verification doesn't depend on canonical JSON formatting.
 
-### 2.2 Inner payload (`schema_version: 3`)
+### 2.2 Inner payload
+
+> The example below shows the historical v3 field set; the v4 additions
+> are listed in §2.5. The current payload is a `DisciplinePayload`
+> (`event`, `discipline`, `teams`, `runners`, `team_entries`, `runs`,
+> `approved_penalties`).
 
 After base64-decoding `envelope.payload` you get this JSON:
 
 ```jsonc
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "exported_at": "2026-05-06T10:13:00Z",
   "owner_sub": "<cognito-sub>",                 // must equal envelope.owner_sub
   "competition": {
@@ -158,6 +170,73 @@ When the desktop produces the result file, it MUST:
 - HTTP `Content-Disposition`: `attachment; filename="kido-<slug>-<date>.kido"`
 
 The desktop is free to write the file with any name the operator picks; the web import endpoint accepts any filename.
+
+### 2.5 Schema v4 additions (Gruppenstafette 2027)
+
+All additions are present on export; on import every addition is optional
+and defaulted (same read-time migration as the DynamoDB rows), but
+`schema_version` / envelope `v` must be `4`.
+
+```jsonc
+{
+  "schema_version": 4,
+  "event": {
+    "current_run_id": "<uuid|null>",          // legacy mirror = current_run_ids[0]
+    "current_run_ids": ["<uuid>", "<uuid>"]   // one per active lane
+  },
+  "discipline": {
+    "mode": "gruppenstaffette",
+    "lane_count": 2,                          // gruppenstaffette 1|2, loeschangriff 4
+    "judge_mode": "per_station",              // | "per_station_and_lane"
+    "sync_mode": "offline"                    // "on_prem" accepted as alias on input
+  },
+  "team_entries": [
+    {
+      "wg": "wg2",                            // ticked by the club; null on legacy rows
+      "wg_history": [ { "from": "wg2", "to": "wg1", "by": "…", "at": "…", "note": null } ]
+      // wg_warnings is NOT exported (computed on read in the web API)
+    }
+  ],
+  "runs": [
+    {
+      "lineup": ["<runner uuid>"],
+      "lineup_confirmed_at": "<rfc3339|null>",
+      "lineup_confirmed_by": "startlinie",    // | "organizer" | null
+      "time_source": "handstopp",             // | "lichtschranke" (default)
+      "hand_time_1_ms": 47230,
+      "hand_time_2_ms": 47245                 // original_time_ms = mean rounded to 1/100 s
+    }
+  ],
+  "approved_penalties": [
+    {
+      "kind": "fv",                           // "sz" (+15 s) | "fv" (run invalid)
+      "code": "knotengestell.mehrere_knoten_falsch", // catalogue code, null on legacy rows
+      "station": "knotengestell",             // canonical key
+      "delta_ms": 0,                          // sz → 15000, fv → 0 (legacy rows unchanged)
+      "is_disqualification": true             // = kind == fv, kept for old readers
+    }
+  ]
+}
+```
+
+New enum values:
+
+```
+JudgeMode      = "per_station" | "per_station_and_lane"
+StationKind    = "startlinie" | "verteilerlinie" | "strahlrohrlinie" | "knotengestell" | "angriffslinie" | "podest"
+                 (legacy input aliases: start, verteiler, strahlrohr, knoten, kuebelspritze)
+PenaltyKind    = "sz" | "fv"
+TimeSource     = "lichtschranke" | "handstopp"
+Wertungsgruppe = "wg1" … "wg5"
+```
+
+Missing fields read as: `current_run_ids` → `[current_run_id]`;
+`lane_count` → mode default; `judge_mode` → `per_station`; `wg_history`,
+`lineup` → `[]`; `time_source` → `lichtschranke`; `kind` →
+`is_disqualification ? fv : sz`; `code` → `null`.
+
+The live endpoints `GET /api/export/events` and `GET /api/export/disciplines`
+additionally return `current_run_ids` and `lane_count` / `judge_mode`.
 
 ---
 
@@ -360,7 +439,7 @@ The web does **not** wipe data on mode switch — switching is metadata-only.
 - **Cache the HMAC key in the OS keychain**, not in plaintext on disk. It's effectively as sensitive as the API key (in fact, both together let you forge offline files for this user).
 - **Don't trust your local clock for `correction_ms` math.** The web is the authority for penalties (they're either decided online by deciders or stamped `approved` on import).
 - **Idempotency:** the live ingest endpoint is keyed on `run_id` and is idempotent. If a POST times out, retry — the server will simply overwrite with the same values.
-- **Schema version check first.** When loading any payload (file or `GET /api/export/disciplines/:id`), bail if `schema_version != 3`. New fields land additively under `schema_version: 3` for non-breaking changes; a v4 will mean a coordinated release.
+- **Schema version check first.** When loading any payload (file or `GET /api/export/disciplines/:id`), bail if `schema_version != 4`. New fields land additively under `schema_version: 4` for non-breaking changes; a v5 will mean a coordinated release.
 
 ---
 
