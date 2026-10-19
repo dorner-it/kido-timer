@@ -30,14 +30,65 @@ pub enum PenaltyStatus {
 }
 
 impl PenaltyStatus {
+    /// Wire value: `"pending"`, `"approved"`, `"rejected"`.
     pub fn as_str(self) -> &'static str {
-        todo!()
+        match self {
+            PenaltyStatus::Pending => "pending",
+            PenaltyStatus::Approved => "approved",
+            PenaltyStatus::Rejected => "rejected",
+        }
     }
 
     /// Whether the error counts towards the result: `Pending` and
     /// `Approved` count (pending ones make the result *provisional*),
     /// `Rejected` does not.
     pub fn counts(self) -> bool {
-        todo!()
+        matches!(self, PenaltyStatus::Pending | PenaltyStatus::Approved)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sz_penalty_is_15s() {
+        assert_eq!(SZ_PENALTY_MS, 15_000);
+    }
+
+    #[test]
+    fn kind_wire_values() {
+        assert_eq!(serde_json::to_string(&PenaltyKind::Sz).unwrap(), "\"sz\"");
+        assert_eq!(serde_json::to_string(&PenaltyKind::Fv).unwrap(), "\"fv\"");
+        let sz: PenaltyKind = serde_json::from_str("\"sz\"").unwrap();
+        let fv: PenaltyKind = serde_json::from_str("\"fv\"").unwrap();
+        assert_eq!((sz, fv), (PenaltyKind::Sz, PenaltyKind::Fv));
+        assert!(serde_json::from_str::<PenaltyKind>("\"SZ\"").is_err());
+        assert!(serde_json::from_str::<PenaltyKind>("\"dq\"").is_err());
+    }
+
+    #[test]
+    fn status_wire_values_match_as_str() {
+        for s in [
+            PenaltyStatus::Pending,
+            PenaltyStatus::Approved,
+            PenaltyStatus::Rejected,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            assert_eq!(json, format!("\"{}\"", s.as_str()));
+            let back: PenaltyStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, s);
+        }
+        assert_eq!(PenaltyStatus::Pending.as_str(), "pending");
+        assert_eq!(PenaltyStatus::Approved.as_str(), "approved");
+        assert_eq!(PenaltyStatus::Rejected.as_str(), "rejected");
+        assert!(serde_json::from_str::<PenaltyStatus>("\"withdrawn\"").is_err());
+    }
+
+    #[test]
+    fn counts() {
+        assert!(PenaltyStatus::Pending.counts());
+        assert!(PenaltyStatus::Approved.counts());
+        assert!(!PenaltyStatus::Rejected.counts());
     }
 }
