@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { modeLabelDE, t } from "../lib/i18n";
 import type { DisciplineListItem, SyncMode } from "../lib/cloudTypes";
+import { effectiveSyncMode, isOverridden, syncModeLabel, type SyncOverrides } from "../lib/syncMode";
 
 interface Props {
   open: boolean;
@@ -8,6 +9,8 @@ interface Props {
   loading: boolean;
   error: string | null;
   selectedId: string | null;
+  /** Desktop sync-mode overrides (shown as the effective mode). */
+  syncOverrides: SyncOverrides;
   onRefresh: () => Promise<void>;
   onPick: (id: string) => Promise<unknown>;
   onClose: () => void;
@@ -19,6 +22,7 @@ export function CompetitionPicker({
   loading,
   error,
   selectedId,
+  syncOverrides,
   onRefresh,
   onPick,
   onClose,
@@ -129,14 +133,17 @@ export function CompetitionPicker({
                               {d.name}
                             </p>
                             <p className="mt-0.5 font-mono text-[11px] text-ink-200/80">
-                              {modeLabelDE(d.mode)}
+                              {modeLabelDE(d.mode, d.lane_count)}
                             </p>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
                             {d.is_current && (
                               <Badge color="signal" label={t.cloud.activeBadge} />
                             )}
-                            <SyncBadge mode={d.sync_mode} />
+                            <SyncBadge
+                              mode={effectiveSyncMode(d.sync_mode, syncOverrides[d.id])}
+                              webDefault={d.sync_mode}
+                            />
                           </div>
                         </div>
                       </button>
@@ -183,11 +190,20 @@ function Badge({
   );
 }
 
-function SyncBadge({ mode }: { mode: SyncMode }) {
-  return mode === "live" ? (
-    <Badge color="signal" label={t.cloud.liveBadge} />
-  ) : (
-    <Badge color="warn" label={t.cloud.offlineBadge} />
+function SyncBadge({ mode, webDefault }: { mode: SyncMode; webDefault: SyncMode }) {
+  const overridden = isOverridden(webDefault, mode);
+  return (
+    <span
+      className="flex items-center gap-1"
+      title={overridden ? t.cloud.overriddenHint(syncModeLabel(webDefault)) : t.syncMode.webDefault}
+    >
+      {mode === "live" ? (
+        <Badge color="signal" label={t.cloud.liveBadge} />
+      ) : (
+        <Badge color="warn" label={t.cloud.offlineBadge} />
+      )}
+      {overridden && <Badge color="neutral" label={t.cloud.overriddenBadge} />}
+    </span>
   );
 }
 

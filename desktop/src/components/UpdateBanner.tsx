@@ -17,7 +17,7 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
   }
 
   return (
-    <div className="fixed right-6 top-20 z-30 max-w-[360px] animate-[fade_0.2s_ease]">
+    <div className="no-print fixed right-6 top-20 z-30 max-w-[360px] animate-[fade_0.2s_ease]">
       <div className="surface flex items-start gap-3 border border-signal/30 bg-signal/[0.06] px-4 py-3 ring-1 ring-signal/20">
         <UpdateIcon />
         <div className="flex-1">

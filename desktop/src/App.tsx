@@ -12,17 +12,22 @@ import { CompetitionBanner } from "./components/CompetitionBanner";
 import { LaneAssignmentPanel } from "./components/LaneAssignmentPanel";
 import { KidoConflictDialog } from "./components/KidoConflictDialog";
 import { ConfirmRunModal, type ConfirmRunStep } from "./components/ConfirmRunModal";
+import { DivergenceDialog } from "./components/DivergenceDialog";
+import { ResultsView } from "./components/ResultsView";
 import { useConnection } from "./lib/useConnection";
 import { useUpdater } from "./lib/useUpdater";
 import { useCloud } from "./lib/useCloud";
 import { loadSettings, patchSettings, type AppSettings, type Theme } from "./lib/persistence";
 import { t } from "./lib/i18n";
 import type { ChannelStatus, FrameDto, RunEntry } from "./lib/types";
-import type { KidoConflict } from "./lib/cloudTypes";
+import type { KidoConflict, SyncMode } from "./lib/cloudTypes";
+import { HARDWARE_CHANNELS, laneCountFor, resolveLane } from "./lib/lanes";
+import { catalogueIndex } from "./lib/penalties";
 
-type View = "lanes" | "protocol";
+type View = "lanes" | "protocol" | "results";
 
-const NUM_LANES = 4;
+/** Hardware channels — lane N = channel N (Gruppenstafette: 1 channel per lane). */
+const NUM_LANES = HARDWARE_CHANNELS;
 
 export default function App() {
   const [selectedLane, setSelectedLane] = useState<number | null>(null);
@@ -111,16 +116,24 @@ export default function App() {
   >({ open: false });
 
   const cloudSnapshot = cloud.state.snapshot;
-  const cloudPostLaneStatus = cloud.postLaneStatus;
+  const cloudRecordLaneStatus = cloud.recordLaneStatus;
   const frame = conn.state.frame;
+  /** Lanes in use: discipline `lane_count`, all 4 channels without one. */
+  const laneCount = laneCountFor(cloudSnapshot);
+  const catalogue = useMemo(
+    () => catalogueIndex(cloud.state.catalogue),
+    [cloud.state.catalogue],
+  );
 
+  // Every timing change is recorded in the local store (persisted, part of
+  // the `.kido` export); the Rust side additionally posts it when live.
   useEffect(() => {
     if (!frame) return;
     if (!cloudSnapshot) return;
-    if (cloudSnapshot.discipline.sync_mode !== "live") return;
 
     frame.channels.forEach((ch, idx) => {
       const lane = idx + 1;
+      if (lane > laneCount) return;
       const prev = lastChannelStatusRef.current[idx];
       const next = ch.status;
       lastChannelStatusRef.current[idx] = next;
@@ -131,7 +144,7 @@ export default function App() {
       // Inactive → Running: a new run started on this lane.
       if (next === "running" && prev !== "running" && prev !== "captured") {
         startedAtRef.current[idx] = nowIso;
-        void cloudPostLaneStatus(lane, {
+        void cloudRecordLaneStatus(lane, {
           status: "active",
           startedAt: nowIso,
         });
@@ -145,14 +158,14 @@ export default function App() {
       ) {
         const startedAt = startedAtRef.current[idx];
         startedAtRef.current[idx] = null;
-        void cloudPostLaneStatus(lane, {
+        void cloudRecordLaneStatus(lane, {
           status: "cancelled",
           startedAt,
           endedAt: nowIso,
         });
       }
     });
-  }, [frame, cloudSnapshot, cloudPostLaneStatus]);
+  }, [frame, cloudSnapshot, cloudRecordLaneStatus, laneCount]);
 
   // Derive the operator-confirmation queue straight from the history list.
   // Per lane we keep the newest entry whose id has not been posted yet; once
@@ -164,27 +177,31 @@ export default function App() {
     const byLane = new Map<number, RunEntry>();
     for (const entry of conn.state.history) {
       if (postedConfirmIds.has(entry.id)) continue;
+      if (cloudSnapshot && entry.channel > laneCount) continue;
       if (byLane.has(entry.channel)) continue;
       byLane.set(entry.channel, entry);
     }
     return byLane;
-  }, [conn.state.history, postedConfirmIds]);
+  }, [conn.state.history, postedConfirmIds, cloudSnapshot, laneCount]);
 
+  /** "Lauf übernehmen": record the confirmed times (local store + live POST). */
   const postPendingRuns = useCallback(() => {
     if (pendingHistoryEntries.size === 0) return;
-    if (!cloudSnapshot) return;
-    if (cloudSnapshot.discipline.sync_mode !== "live") return;
     const justPosted = new Set<string>();
     pendingHistoryEntries.forEach((entry, lane) => {
       const startedAt = startedAtRef.current[lane - 1];
       const endedAt = new Date(entry.timestamp).toISOString();
       startedAtRef.current[lane - 1] = null;
-      void cloudPostLaneStatus(lane, {
-        status: "completed",
-        originalTimeMs: entry.originalTimeMs,
-        startedAt,
-        endedAt,
-      });
+      if (cloudSnapshot) {
+        // The device time is stored as measured; operator corrections on
+        // the lane card are display-only (SZ come from the judges).
+        void cloudRecordLaneStatus(lane, {
+          status: "completed",
+          originalTimeMs: entry.originalTimeMs,
+          startedAt,
+          endedAt,
+        });
+      }
       justPosted.add(entry.id);
     });
     setPostedConfirmIds((prev) => {
@@ -192,7 +209,7 @@ export default function App() {
       justPosted.forEach((id) => next.add(id));
       return next;
     });
-  }, [pendingHistoryEntries, cloudSnapshot, cloudPostLaneStatus]);
+  }, [pendingHistoryEntries, cloudSnapshot, cloudRecordLaneStatus]);
 
   const handleConfirmRunClick = useCallback(() => {
     if (pendingHistoryEntries.size === 0) return;
@@ -246,7 +263,7 @@ export default function App() {
         case "2":
         case "3":
         case "4":
-          setSelectedLane(Number(e.key) - 1);
+          if (Number(e.key) <= laneCount) setSelectedLane(Number(e.key) - 1);
           break;
         case "+":
         case "=":
@@ -277,7 +294,36 @@ export default function App() {
     pairingOpen,
     pickerOpen,
     pendingKidoConflict,
+    laneCount,
   ]);
+
+  // Keep the focus inside the lanes in use.
+  useEffect(() => {
+    if (selectedLane !== null && selectedLane >= laneCount) setSelectedLane(null);
+  }, [laneCount, selectedLane]);
+
+  const laneCaptions = useMemo(
+    () =>
+      Array.from({ length: laneCount }, (_, i) => {
+        const resolved = resolveLane(cloudSnapshot, i + 1, cloud.state.laneOverrides);
+        if (!resolved || !cloudSnapshot) return null;
+        const team = cloudSnapshot.teams.find((tm) => tm.id === resolved.run.team_id);
+        return team ? `${team.name} · ${t.laneAssign.runLabel} ${resolved.run.run_number}` : null;
+      }),
+    [laneCount, cloudSnapshot, cloud.state.laneOverrides],
+  );
+
+  const handleSyncModeChange = useCallback(
+    (mode: SyncMode | null) => {
+      if (!cloudSnapshot) return;
+      cloud.setSyncOverride(
+        cloudSnapshot.discipline.id,
+        cloudSnapshot.discipline.sync_mode,
+        mode,
+      );
+    },
+    [cloud, cloudSnapshot],
+  );
 
   const handleSetupConfirm = useCallback(
     (next: AppSettings, mode: "serial" | "demo" | "cloud") => {
@@ -359,7 +405,8 @@ export default function App() {
   }, [cloud, pendingKidoConflict]);
 
   return (
-    <div className="flex h-screen w-screen flex-col">
+    <div className="app-shell flex h-screen w-screen flex-col">
+      <div className="no-print">
       <TopBar
         status={conn.state.status}
         source={conn.state.source}
@@ -373,12 +420,16 @@ export default function App() {
         resetDisabled={conn.state.status !== "connected"}
         confirmDisabled={pendingHistoryEntries.size === 0}
       />
+      </div>
 
       <main className="min-h-0 flex-1 flex flex-col">
         {view === "lanes" && (
           <>
             <CompetitionBanner
               snapshot={cloud.state.snapshot}
+              effectiveMode={cloud.effectiveMode}
+              catalogue={catalogue}
+              onSyncModeChange={handleSyncModeChange}
               onClose={() => void cloud.deselect()}
             />
             {cloud.state.snapshot && (
@@ -394,10 +445,18 @@ export default function App() {
           <LanesView
             frame={conn.state.frame}
             corrections={corrections}
+            laneCount={laneCount}
+            laneCaptions={laneCaptions}
             selectedLane={selectedLane}
             onSelectLane={setSelectedLane}
             onAdjust={adjustChannel}
             onClear={clearChannel}
+          />
+        ) : view === "results" ? (
+          <ResultsView
+            snapshot={cloud.state.snapshot}
+            effectiveMode={cloud.effectiveMode}
+            onBack={() => setView("lanes")}
           />
         ) : (
           <ProtocolView
@@ -420,6 +479,10 @@ export default function App() {
         onReset={handleReset}
         onOpenProtocol={() => {
           setView("protocol");
+          setDrawerOpen(false);
+        }}
+        onOpenResults={() => {
+          setView("results");
           setDrawerOpen(false);
         }}
         cloudIdentity={cloud.state.identity}
@@ -464,6 +527,7 @@ export default function App() {
         loading={cloud.state.loading}
         error={cloud.state.error}
         selectedId={cloud.state.snapshot?.discipline.id ?? null}
+        syncOverrides={cloud.state.syncOverrides}
         onRefresh={cloud.refreshDisciplines}
         onPick={cloud.selectDiscipline}
         onClose={() => setPickerOpen(false)}
@@ -486,7 +550,20 @@ export default function App() {
         onAcceptReset={handleConfirmModalAcceptReset}
       />
 
+      <DivergenceDialog
+        divergences={cloud.effectiveMode === "live" ? cloud.state.divergences : []}
+        snapshot={cloud.state.snapshot}
+        onUpload={() => cloud.resolveDivergence(true)}
+        onDiscard={() => cloud.resolveDivergence(false)}
+      />
+
       <ErrorBanner message={conn.state.error} onDismiss={conn.clearError} />
+      <ErrorBanner
+        message={pickerOpen ? null : cloud.state.error}
+        onDismiss={cloud.dismissError}
+        title={t.cloud.title}
+        raised={!!conn.state.error}
+      />
 
       <UpdateBanner
         state={updater.state}
@@ -500,6 +577,8 @@ export default function App() {
 interface LanesViewProps {
   frame: FrameDto | null;
   corrections: number[];
+  laneCount: number;
+  laneCaptions: (string | null)[];
   selectedLane: number | null;
   onSelectLane: (lane: number | null) => void;
   onAdjust: (channel: number, delta: number) => void;
@@ -509,6 +588,8 @@ interface LanesViewProps {
 function LanesView({
   frame,
   corrections,
+  laneCount,
+  laneCaptions,
   selectedLane,
   onSelectLane,
   onAdjust,
@@ -531,6 +612,8 @@ function LanesView({
         <LaneGrid
           frame={frame}
           corrections={corrections}
+          laneCount={laneCount}
+          laneCaptions={laneCaptions}
           selectedLane={selectedLane}
           onSelectLane={onSelectLane}
           onAdjust={onAdjust}

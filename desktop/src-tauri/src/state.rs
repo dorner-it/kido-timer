@@ -16,8 +16,14 @@ const RESET_CMD: &[u8] = b"RST\r";
 /// Active connection: either a real serial port (with a write handle) or a
 /// demo file replayer.
 pub enum Connection {
-    Serial { reader: SerialReader, source: String },
-    Demo { reader: FileReader, source: String },
+    Serial {
+        reader: SerialReader,
+        source: String,
+    },
+    Demo {
+        reader: FileReader,
+        source: String,
+    },
 }
 
 impl Connection {
@@ -158,4 +164,3 @@ fn spawn_event_bridge(app_handle: AppHandle, rx: mpsc::Receiver<SerialEvent>) {
         }
     });
 }
-

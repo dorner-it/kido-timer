@@ -2,7 +2,10 @@ mod cloud;
 mod commands;
 mod dto;
 mod file_reader;
+mod lanes;
+mod local;
 mod protocol;
+mod results;
 mod serial_reader;
 mod state;
 
@@ -24,6 +27,12 @@ pub fn run() {
             if let Err(e) = state.cloud.load_from_keychain() {
                 eprintln!("cloud: keychain load failed: {e}");
             }
+            // Local result store: restore the last loaded discipline incl.
+            // results recorded before a crash / restart.
+            match app.path().app_data_dir() {
+                Ok(dir) => state.cloud.init_storage(dir.join(local::persist::DIR_NAME)),
+                Err(e) => eprintln!("local store: no app data dir: {e}"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -42,12 +51,18 @@ pub fn run() {
             commands::cloud_select_discipline,
             commands::cloud_deselect,
             commands::cloud_snapshot,
-            commands::cloud_post_run_status,
+            commands::cloud_set_sync_mode,
+            commands::cloud_record_lane_status,
+            commands::cloud_divergences,
+            commands::cloud_resolve_divergence,
+            commands::cloud_take_startup_warning,
             commands::cloud_retry_post,
             commands::cloud_clear_failed_post,
             commands::cloud_failed_posts,
             commands::cloud_open_kido,
             commands::cloud_export_kido,
+            commands::compute_results,
+            commands::kido_catalogue,
         ])
         .run(tauri::generate_context!())
         .expect("error while running KiDo-Timer");

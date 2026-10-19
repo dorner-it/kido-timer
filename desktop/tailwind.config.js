@@ -4,7 +4,16 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ["Bricolage Grotesque", "ui-sans-serif", "system-ui", "sans-serif"],
+        // System fallbacks first-class: no web fonts are loaded (offline venues).
+        display: [
+          "Bricolage Grotesque",
+          "ui-sans-serif",
+          "system-ui",
+          "Segoe UI",
+          "Helvetica Neue",
+          "Arial",
+          "sans-serif",
+        ],
         mono: [
           "JetBrains Mono",
           "ui-monospace",
@@ -14,7 +23,15 @@ export default {
           "Consolas",
           "monospace",
         ],
-        stencil: ["Antonio", "Bricolage Grotesque", "sans-serif"],
+        stencil: [
+          "Antonio",
+          "Bahnschrift",
+          "DIN Condensed",
+          "Arial Narrow",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
       },
       colors: {
         ink: {

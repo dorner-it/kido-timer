@@ -98,6 +98,8 @@ jobs:
         run: npm ci
       - working-directory: desktop
         run: npm run build
+      - working-directory: desktop
+        run: npm test
       - name: cargo check
         working-directory: desktop/src-tauri
         run: cargo check --all-targets

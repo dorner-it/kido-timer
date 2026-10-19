@@ -5,7 +5,8 @@ Connects directly to the timer over a serial port, parses the proprietary 41-byt
 a coach/operator workstation with four lane channels, software time correction, a confirmed-split run log, and
 demo replay of captured hex dumps.
 
-The app is a single self-contained Windows executable. There are no network dependencies at runtime.
+The app is a single self-contained Windows executable. Network access is only needed for the
+optional live connection to ki-do.it (no web fonts, no CDN).
 
 ## Features
 
@@ -16,6 +17,15 @@ The app is a single self-contained Windows executable. There are no network depe
 - **Device reset** (`RST\r`) sent over the wire with a confirm step.
 - **Demo Mode** — load a captured xxd-style hex dump and replay it at any speed; great for training, demos,
   and developing without the timer present.
+- **Wettkampf (schema v4, Gruppenstafette 2027)** — loads a discipline from ki-do.it or a signed
+  `.kido` file; shows `lane_count` lanes (lane N = timer channel N), all current runs with their
+  errors (SZ/FV, catalogue text, status) and the provisional run result.
+- **Live / On-prem** — the web sets the default per discipline, the desktop can override it.
+  Every recorded time lands in the local result store (JSON in the app data dir, restored after a
+  restart); live mode additionally posts it. Switching back to live with diverging local results
+  asks "hochladen" or "verwerfen".
+- **Ergebnisse & Druck** — WG rankings and Tagessieger computed locally with `kido-core`
+  (identical to the web), print layout A4 (one WG per page). No web fonts — works offline.
 - **Keyboard shortcuts**: `1`–`4` focus a lane, `+`/`−` adjust the focused lane by ±5 s, `C` clears the
   correction, `Esc` clears focus.
 
@@ -80,9 +90,10 @@ npm run tauri build
 
 Outputs land under `src-tauri/target/release/bundle/`. On Windows that's an `.msi` and an `.nsis` installer.
 
-### Backend tests
+### Tests
 
 ```bash
+npm test                                   # vitest (pure TS logic)
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
