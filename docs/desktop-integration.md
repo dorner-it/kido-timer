@@ -51,8 +51,9 @@ Schema history:
   `hand_time_*`, TeamEntry `wg` (input) + `wg_history`, Penalty `kind` /
   `code` and canonical station keys — see §2.5. The web imports v4
   only; v3 files are rejected with `400 validation` ("veraltetes Schema
-  v3 … erwartet v4"). The desktop app is still on v2 and catches up in a
-  later PR.
+  v3 … erwartet v4"). The desktop app reads and writes v4 only since
+  0.6.0 (older envelopes, payloads, live snapshots and local backups are
+  rejected with "Bitte Web-App/Desktop aktualisieren").
 
 ### 2.1 Signing rule
 
@@ -237,6 +238,38 @@ Missing fields read as: `current_run_ids` → `[current_run_id]`;
 
 The live endpoints `GET /api/export/events` and `GET /api/export/disciplines`
 additionally return `current_run_ids` and `lane_count` / `judge_mode`.
+
+### 2.6 Desktop local result store (0.6.0)
+
+The desktop keeps its own copy of the loaded discipline so no result is
+lost — neither on-prem nor when a live POST fails or the app crashes.
+
+- **Model**: `base` = last snapshot from the web (picker / live poll) or
+  from a `.kido` file; `run_edits` = run timing changes recorded on the
+  desktop that the web has not acknowledged. The UI, the results and the
+  `.kido` export use base + edits.
+- **Live**: every change is posted (`POST …/runs/:run_id/result`); the
+  edit is dropped when the POST succeeds, kept (and queued as failed
+  post) when it fails. Polls never hide a local edit.
+- **On-prem** (`sync_mode = offline`, web default or desktop override):
+  nothing is posted; edits are the master copy and end up in the `.kido`
+  export (status, `original_time_ms`, `started_at`, `ended_at`).
+- **Back to live**: if local edits differ from the web (status/time),
+  posting stops and the operator chooses "Lokale Ergebnisse hochladen"
+  (one result POST per run, in run-number order) or "Lokale Änderungen
+  verwerfen". Penalties / lineups are not uploaded yet (on-prem PR).
+  Note: the web rejects result POSTs with `409` while the discipline is
+  set to `offline` on the web — switch it to live there first.
+- **Persistence**: JSON under the Tauri app data dir,
+  `<app_data>/local-store/disciplines/<discipline_id>.json`
+  (`{ format: 1, saved_at, effective_mode, store: { base, run_edits },
+  failed_posts }`) plus `local-store/current.json` (discipline restored on
+  start). Written atomically (tmp + rename) after every change; files are
+  kept per discipline, unreadable files are moved aside as
+  `<id>.broken-<unix>.json`, never overwritten.
+- **Sync-mode override**: stored per discipline in the desktop's
+  localStorage (`kido-timer:sync-overrides:v1`); choosing the web default
+  removes the override.
 
 ---
 
@@ -439,7 +472,7 @@ The web does **not** wipe data on mode switch — switching is metadata-only.
 - **Cache the HMAC key in the OS keychain**, not in plaintext on disk. It's effectively as sensitive as the API key (in fact, both together let you forge offline files for this user).
 - **Don't trust your local clock for `correction_ms` math.** The web is the authority for penalties (they're either decided online by deciders or stamped `approved` on import).
 - **Idempotency:** the live ingest endpoint is keyed on `run_id` and is idempotent. If a POST times out, retry — the server will simply overwrite with the same values.
-- **Schema version check first.** When loading any payload (file or `GET /api/export/disciplines/:id`), bail if `schema_version != 4`. New fields land additively under `schema_version: 4` for non-breaking changes; a v5 will mean a coordinated release.
+- **Schema version check first.** When loading any payload (file, `GET /api/export/disciplines/:id`, every poll), bail if `schema_version != 4` — probe the version before the full parse so old payloads yield the version message, not a parse error. New fields land additively under `schema_version: 4` for non-breaking changes; a v5 will mean a coordinated release.
 
 ---
 
