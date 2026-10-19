@@ -160,6 +160,15 @@ Source: `kido_core::catalogue::CATALOGUE`, in sheet order.
 
 `runners` is the team's full roster (by position) for the lineup tick list.
 
+PR 2: optional query `?station=<key>` (canonical or legacy key). The
+response then also carries `"penalties": [Penalty, …]` — the penalties
+of the current runs (all statuses, oldest first), restricted to that
+station when `station` is given. The judge app uses it to show the
+review status of its own entries (ausstehend / bestätigt /
+zurückgenommen). Empty when no run is current or the discipline is
+offline. Clients must tolerate the field being absent (older backend,
+future on-prem server).
+
 `POST /api/decider/{owner_sub}/{token}/penalties`
 
 ```jsonc
