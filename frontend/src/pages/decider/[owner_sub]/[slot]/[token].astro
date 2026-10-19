@@ -1,5 +1,5 @@
 ---
-import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import JudgeLayout from '../../../../layouts/JudgeLayout.astro';
 import DeciderPad from '../../../../components/react/DeciderPad.tsx';
 
 const { owner_sub, slot, token } = Astro.params;
@@ -13,11 +13,11 @@ if (!Number.isInteger(slotNumber) || slotNumber < 1 || slotNumber > 4) {
 }
 ---
 
-<BaseLayout title={`Strafrichter B${slot} – KI-DO Timer`} bare>
+<JudgeLayout title={`Strafrichter B${slot} – KI-DO Timer`}>
   <DeciderPad
     ownerSub={owner_sub}
     slotIndex={slot}
     token={token}
     client:load
   />
-</BaseLayout>
+</JudgeLayout>

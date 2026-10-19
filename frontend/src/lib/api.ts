@@ -12,11 +12,10 @@ import {
   normalizeTeamEntry,
 } from './schemas';
 import type { StationKind } from './stations';
+import { getApiBase } from './api-base';
 
 export type { StationKind } from './stations';
-
-const API_BASE_URL =
-  (import.meta.env.PUBLIC_API_BASE_URL as string | undefined) ?? '';
+export { getApiBase } from './api-base';
 
 export class ApiError extends Error {
   constructor(
@@ -56,7 +55,7 @@ async function request<T>(
   init: RequestOptions = {},
 ): Promise<T> {
   const { allowUnauthorized, ...fetchInit } = init;
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const res = await fetch(`${getApiBase()}${path}`, {
     credentials: 'include',
     ...fetchInit,
     headers: {
@@ -344,6 +343,9 @@ export interface StationDeciderState {
   current_run: StationCurrentRun | null;
   disabled: boolean;
   allowed_stations: StationKind[];
+  /** PR 2: penalties of the current runs (of `?station=` when given).
+   *  `undefined` when the backend doesn't send the field. */
+  penalties?: Penalty[];
 }
 
 export interface BulkApproveResponse {
@@ -522,7 +524,7 @@ export const apiClient = {
       discipline_id: string,
     ): Promise<{ blob: Blob; filename: string }> => {
       const res = await fetch(
-        `${API_BASE_URL}/api/events/${event_id}/disciplines/${discipline_id}/export-file`,
+        `${getApiBase()}/api/events/${event_id}/disciplines/${discipline_id}/export-file`,
         { credentials: 'include' },
       );
       if (!res.ok) {
@@ -760,9 +762,14 @@ export const apiClient = {
   // Station-token flow. Same shape as the slot flow, minus the slot
   // path segment — the station travels in the body instead.
   deciderStation: {
-    state: async (owner_sub: string, token: string) =>
+    /** `station` (optional) restricts `penalties` to the judge's station. */
+    state: async (owner_sub: string, token: string, station?: StationKind | null) =>
       normalizeStationState(
-        await request<unknown>(`/api/decider/${owner_sub}/${token}/state`),
+        await request<unknown>(
+          `/api/decider/${owner_sub}/${token}/state${
+            station ? `?station=${encodeURIComponent(station)}` : ''
+          }`,
+        ),
       ),
     submit: async (owner_sub: string, token: string, input: StationPenaltyInput) =>
       normalizePenalty(
@@ -784,11 +791,17 @@ export const apiClient = {
       );
     },
     /** Startlinie only; run must be one of `current_run_ids`. */
-    setLineup: async (owner_sub: string, token: string, run_id: string, runner_ids: string[]) =>
+    setLineup: async (
+      owner_sub: string,
+      token: string,
+      run_id: string,
+      runner_ids: string[],
+      station?: StationKind,
+    ) =>
       normalizeRun(
         await request<unknown>(`/api/decider/${owner_sub}/${token}/runs/${run_id}/lineup`, {
           method: 'PUT',
-          body: JSON.stringify({ runner_ids }),
+          body: JSON.stringify(station ? { runner_ids, station } : { runner_ids }),
         }),
       ),
   },
