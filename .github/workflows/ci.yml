@@ -11,7 +11,7 @@ permissions:
 jobs:
   core:
     name: kido-core (fmt + clippy + test)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -29,7 +29,7 @@ jobs:
 
   backend:
     name: Backend (cargo test)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -45,7 +45,7 @@ jobs:
 
   frontend-tests:
     name: Frontend (vitest)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
@@ -60,7 +60,7 @@ jobs:
 
   frontend:
     name: Frontend (astro check + build)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
@@ -79,7 +79,7 @@ jobs:
 
   desktop:
     name: Desktop (judge build + tsc + vite + cargo fmt/clippy/test)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
