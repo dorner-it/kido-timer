@@ -134,7 +134,8 @@ Tagessieger (across all WGs, one per competition):
 - **Decided 2026-10-16: variant (a)** — the run with the best time, with
   that run's lineup (same run as in the WG ranking).
 
-New endpoint `GET /api/disciplines/:id/results` → WG rankings + Tagessieger.
+New endpoint `GET /api/events/:id/disciplines/:discipline_id/results` → WG rankings + Tagessieger
+(shape: `docs/api.md` § Results).
 Frontend: result view + print view. The scoring code lives in the shared
 crate `crates/kido-core` so backend and desktop compute identical results.
 

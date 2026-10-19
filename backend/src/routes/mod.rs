@@ -7,6 +7,7 @@ pub mod disciplines;
 pub mod events;
 pub mod export;
 pub mod penalties;
+pub mod results;
 pub mod runners;
 pub mod runs;
 pub mod team_entries;
