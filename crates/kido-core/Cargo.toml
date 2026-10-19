@@ -1,0 +1,16 @@
+[package]
+name = "kido-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "LicenseRef-Proprietary-DornerIT"
+publish = false
+description = "Shared domain logic for KI-DO Timer (backend + desktop): stations, error catalogue, Wertungsgruppen, timing, scoring."
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+serde_json = "1"
