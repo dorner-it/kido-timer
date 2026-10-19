@@ -27,8 +27,7 @@ async fn health_returns_ok_true() {
         .expect("body collects")
         .to_bytes();
 
-    let body: serde_json::Value =
-        serde_json::from_slice(&body_bytes).expect("body is JSON");
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).expect("body is JSON");
 
     assert_eq!(body, serde_json::json!({ "ok": true }));
 }

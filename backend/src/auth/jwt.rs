@@ -34,7 +34,7 @@ pub async fn validate_id_token(
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
 
-    let data = decode::<CognitoIdClaims>(token, &key, &validation)
-        .map_err(|_| AppError::Unauthorized)?;
+    let data =
+        decode::<CognitoIdClaims>(token, &key, &validation).map_err(|_| AppError::Unauthorized)?;
     Ok(data.claims)
 }

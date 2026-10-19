@@ -105,9 +105,7 @@ pub async fn migrate_timer_mode_inplace(
 
                     let (Some(pk), Some(sk)) = (item.get("PK").cloned(), item.get("SK").cloned())
                     else {
-                        return Err(AppError::Internal(
-                            "scanned item missing PK/SK".into(),
-                        ));
+                        return Err(AppError::Internal("scanned item missing PK/SK".into()));
                     };
 
                     if dry_run {
@@ -155,7 +153,10 @@ mod tests {
 
     #[test]
     fn legacy_mapping_covers_all_v1_values() {
-        assert_eq!(map_legacy_timer_mode("single_lane"), Some("gruppenstaffette"));
+        assert_eq!(
+            map_legacy_timer_mode("single_lane"),
+            Some("gruppenstaffette")
+        );
         assert_eq!(
             map_legacy_timer_mode("two_lane_parallel"),
             Some("gruppenstaffette")

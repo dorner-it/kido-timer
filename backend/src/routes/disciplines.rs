@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
-use crate::db::{disciplines, penalties, runs, users};
+use crate::db::{disciplines, penalties, runs, team_entries, users};
 use crate::error::{AppError, AppResult};
 use crate::export;
-use crate::models::{Discipline, PenaltyStatus, SyncMode, TimerMode};
+use crate::models::{Discipline, JudgeMode, PenaltyStatus, SyncMode, TeamEntry, TimerMode};
 use crate::routes::events::require_owned;
 use crate::state::AppState;
 
@@ -43,6 +43,59 @@ pub struct DisciplineInput {
     pub name: String,
     pub mode: TimerMode,
     pub position: u32,
+    /// Optional; see [`resolve_lane_count`].
+    #[serde(default)]
+    pub lane_count: Option<u8>,
+    /// Optional; defaults to `per_station` (create) or the stored value
+    /// (update).
+    #[serde(default)]
+    pub judge_mode: Option<JudgeMode>,
+}
+
+/// Discipline as returned by `POST`/`PUT`: the stored discipline plus the
+/// team ids whose entry lane exceeds `lane_count` (data is never deleted
+/// when the lane count shrinks; the UI shows a warning instead).
+#[derive(Debug, Serialize)]
+pub struct DisciplineResponse {
+    #[serde(flatten)]
+    pub discipline: Discipline,
+    pub lane_conflicts: Vec<Uuid>,
+}
+
+/// Validate / default the lane count for `mode`.
+///
+/// - Explicit value: must be one of `mode.allowed_lane_counts()`
+///   (Gruppenstaffette 1 | 2, Löschangriff 4), else `400 validation`.
+/// - Omitted on create (`existing = None`): `mode.default_lane_count()`.
+/// - Omitted on update: the stored value if it is still valid for the
+///   (possibly changed) mode, otherwise the mode default.
+pub fn resolve_lane_count(
+    mode: TimerMode,
+    requested: Option<u8>,
+    existing: Option<&Discipline>,
+) -> AppResult<u8> {
+    let allowed = mode.allowed_lane_counts();
+    match requested {
+        Some(n) if allowed.contains(&n) => Ok(n),
+        Some(n) => Err(AppError::Validation(format!(
+            "lane_count {n} ist für {mode:?} nicht erlaubt (erlaubt: {allowed:?})"
+        ))),
+        None => Ok(existing
+            .map(|d| d.lane_count)
+            .filter(|n| allowed.contains(n))
+            .unwrap_or_else(|| mode.default_lane_count())),
+    }
+}
+
+/// Team ids whose entry lane is greater than `lane_count`, sorted by
+/// start number.
+pub fn lane_conflicts(entries: &[TeamEntry], lane_count: u8) -> Vec<Uuid> {
+    let mut hits: Vec<&TeamEntry> = entries
+        .iter()
+        .filter(|e| e.lane.is_some_and(|l| l > lane_count))
+        .collect();
+    hits.sort_by_key(|e| e.start_number);
+    hits.into_iter().map(|e| e.team_id).collect()
 }
 
 pub async fn create(
@@ -50,24 +103,35 @@ pub async fn create(
     auth: AuthenticatedUser,
     Path(event_id): Path<Uuid>,
     Json(input): Json<DisciplineInput>,
-) -> AppResult<(StatusCode, Json<Discipline>)> {
+) -> AppResult<(StatusCode, Json<DisciplineResponse>)> {
     require_owned(&state, &auth, event_id).await?;
     if input.name.trim().is_empty() {
-        return Err(AppError::Validation("discipline name must not be empty".into()));
+        return Err(AppError::Validation(
+            "discipline name must not be empty".into(),
+        ));
     }
+    let lane_count = resolve_lane_count(input.mode, input.lane_count, None)?;
     let now = Utc::now();
     let disc = Discipline {
         id: Uuid::new_v4(),
         event_id,
         name: input.name.trim().to_string(),
         mode: input.mode,
+        lane_count,
+        judge_mode: input.judge_mode.unwrap_or_default(),
         sync_mode: SyncMode::Live,
         position: input.position,
         created_at: now,
         updated_at: now,
     };
     disciplines::put(&state.db, &disc).await?;
-    Ok((StatusCode::CREATED, Json(disc)))
+    Ok((
+        StatusCode::CREATED,
+        Json(DisciplineResponse {
+            discipline: disc,
+            lane_conflicts: Vec::new(),
+        }),
+    ))
 }
 
 pub async fn update(
@@ -75,14 +139,17 @@ pub async fn update(
     auth: AuthenticatedUser,
     Path((event_id, discipline_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<DisciplineInput>,
-) -> AppResult<Json<Discipline>> {
+) -> AppResult<Json<DisciplineResponse>> {
     require_owned(&state, &auth, event_id).await?;
     if input.name.trim().is_empty() {
-        return Err(AppError::Validation("discipline name must not be empty".into()));
+        return Err(AppError::Validation(
+            "discipline name must not be empty".into(),
+        ));
     }
     let existing = disciplines::find(&state.db, event_id, discipline_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("discipline {discipline_id}")))?;
+    let lane_count = resolve_lane_count(input.mode, input.lane_count, Some(&existing))?;
 
     if existing.position != input.position {
         disciplines::delete(&state.db, &existing).await?;
@@ -93,13 +160,21 @@ pub async fn update(
         event_id,
         name: input.name.trim().to_string(),
         mode: input.mode,
+        lane_count,
+        judge_mode: input.judge_mode.unwrap_or(existing.judge_mode),
         sync_mode: existing.sync_mode,
         position: input.position,
         created_at: existing.created_at,
         updated_at: Utc::now(),
     };
     disciplines::put(&state.db, &disc).await?;
-    Ok(Json(disc))
+
+    let entries = team_entries::list_for_discipline(&state.db, event_id, discipline_id).await?;
+    let conflicts = lane_conflicts(&entries, disc.lane_count);
+    Ok(Json(DisciplineResponse {
+        discipline: disc,
+        lane_conflicts: conflicts,
+    }))
 }
 
 pub async fn remove(
@@ -149,8 +224,7 @@ pub async fn export_file(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("discipline {discipline_id}")))?;
 
-    let payload =
-        export::build_discipline_payload(&state, &auth.user.sub, discipline_id).await?;
+    let payload = export::build_discipline_payload(&state, &auth.user.sub, discipline_id).await?;
     let hmac_key = users::get_hmac_key(&state.db, &auth.user.sub).await?;
     let envelope = export::sign(&hmac_key, &payload)?;
 
@@ -284,7 +358,8 @@ mod tests {
         let parsed: DisciplineInput =
             serde_json::from_value(body).expect("v3 body must deserialize");
         assert_eq!(parsed.mode, TimerMode::Gruppenstaffette);
-        assert_eq!(parsed.mode.lane_count(), 2);
+        assert_eq!(parsed.lane_count, None);
+        assert_eq!(parsed.judge_mode, None);
     }
 
     #[test]
@@ -296,7 +371,6 @@ mod tests {
         });
         let parsed: DisciplineInput = serde_json::from_value(body).unwrap();
         assert_eq!(parsed.mode, TimerMode::Loeschangriff);
-        assert_eq!(parsed.mode.lane_count(), 4);
     }
 
     #[test]
@@ -329,5 +403,145 @@ mod tests {
                 "legacy mode {legacy} must be rejected at the JSON boundary"
             );
         }
+    }
+
+    #[test]
+    fn accepts_lane_count_and_judge_mode() {
+        let body = serde_json::json!({
+            "name": "GS",
+            "mode": "gruppenstaffette",
+            "position": 1,
+            "lane_count": 1,
+            "judge_mode": "per_station_and_lane"
+        });
+        let parsed: DisciplineInput = serde_json::from_value(body).unwrap();
+        assert_eq!(parsed.lane_count, Some(1));
+        assert_eq!(parsed.judge_mode, Some(JudgeMode::PerStationAndLane));
+    }
+
+    #[test]
+    fn rejects_unknown_judge_mode() {
+        let body = serde_json::json!({
+            "name": "GS",
+            "mode": "gruppenstaffette",
+            "position": 1,
+            "judge_mode": "per_lane"
+        });
+        assert!(serde_json::from_value::<DisciplineInput>(body).is_err());
+    }
+
+    fn disc(mode: TimerMode, lane_count: u8) -> Discipline {
+        Discipline {
+            id: Uuid::nil(),
+            event_id: Uuid::nil(),
+            name: "D".into(),
+            mode,
+            lane_count,
+            judge_mode: JudgeMode::PerStation,
+            sync_mode: SyncMode::Live,
+            position: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn entry(start_number: u32, lane: Option<u8>) -> TeamEntry {
+        TeamEntry {
+            team_id: Uuid::new_v4(),
+            discipline_id: Uuid::nil(),
+            event_id: Uuid::nil(),
+            start_number,
+            lane,
+            wg: None,
+            wg_history: Vec::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn lane_count_gruppenstaffette_accepts_1_and_2() {
+        let m = TimerMode::Gruppenstaffette;
+        assert_eq!(resolve_lane_count(m, Some(1), None).unwrap(), 1);
+        assert_eq!(resolve_lane_count(m, Some(2), None).unwrap(), 2);
+    }
+
+    #[test]
+    fn lane_count_gruppenstaffette_rejects_others() {
+        for n in [0u8, 3, 4, 255] {
+            let err = resolve_lane_count(TimerMode::Gruppenstaffette, Some(n), None).unwrap_err();
+            assert_eq!(err.code(), "validation", "lane_count {n}");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn lane_count_loeschangriff_only_4() {
+        assert_eq!(
+            resolve_lane_count(TimerMode::Loeschangriff, Some(4), None).unwrap(),
+            4
+        );
+        for n in [1u8, 2, 3, 5] {
+            assert!(resolve_lane_count(TimerMode::Loeschangriff, Some(n), None).is_err());
+        }
+    }
+
+    #[test]
+    fn lane_count_defaults_on_create() {
+        assert_eq!(
+            resolve_lane_count(TimerMode::Gruppenstaffette, None, None).unwrap(),
+            2
+        );
+        assert_eq!(
+            resolve_lane_count(TimerMode::Loeschangriff, None, None).unwrap(),
+            4
+        );
+    }
+
+    #[test]
+    fn lane_count_omitted_on_update_keeps_stored_value() {
+        let existing = disc(TimerMode::Gruppenstaffette, 1);
+        assert_eq!(
+            resolve_lane_count(TimerMode::Gruppenstaffette, None, Some(&existing)).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn lane_count_omitted_on_mode_change_falls_back_to_default() {
+        let existing = disc(TimerMode::Gruppenstaffette, 1);
+        assert_eq!(
+            resolve_lane_count(TimerMode::Loeschangriff, None, Some(&existing)).unwrap(),
+            4
+        );
+        let existing = disc(TimerMode::Loeschangriff, 4);
+        assert_eq!(
+            resolve_lane_count(TimerMode::Gruppenstaffette, None, Some(&existing)).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn lane_conflicts_lists_entries_above_lane_count() {
+        let a = entry(2, Some(2));
+        let b = entry(1, Some(1));
+        let c = entry(3, None);
+        let d = entry(0, Some(2));
+        let entries = vec![a.clone(), b, c, d.clone()];
+        assert_eq!(lane_conflicts(&entries, 1), vec![d.team_id, a.team_id]);
+        assert!(lane_conflicts(&entries, 2).is_empty());
+    }
+
+    #[test]
+    fn response_flattens_discipline_and_adds_conflicts() {
+        let r = DisciplineResponse {
+            discipline: disc(TimerMode::Gruppenstaffette, 1),
+            lane_conflicts: vec![Uuid::nil()],
+        };
+        let out = serde_json::to_value(&r).unwrap();
+        assert_eq!(out["lane_count"], 1);
+        assert_eq!(out["judge_mode"], "per_station");
+        assert_eq!(out["mode"], "gruppenstaffette");
+        assert_eq!(out["lane_conflicts"], serde_json::json!([Uuid::nil()]));
     }
 }
