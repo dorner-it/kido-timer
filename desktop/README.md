@@ -22,8 +22,13 @@ optional live connection to ki-do.it (no web fonts, no CDN).
   errors (SZ/FV, catalogue text, status) and the provisional run result.
 - **Live / On-prem** — the web sets the default per discipline, the desktop can override it.
   Every recorded time lands in the local result store (JSON in the app data dir, restored after a
-  restart); live mode additionally posts it. Switching back to live with diverging local results
-  asks "hochladen" or "verwerfen".
+  restart); live mode additionally posts it. Switching back to live with diverging local changes
+  asks "hochladen" or "verwerfen"; choosing "Live" switches the web to live first.
+- **On-prem judge server (0.7.0)** — in on-prem mode the app serves the Strafrichter app to the
+  judges' phones in the venue network (see [On-prem](#on-prem-strafrichter-im-lokalen-netz)).
+  The organizer picks the current runs per lane, reviews errors (Bestätigen / Zurücknehmen,
+  FV confirmation, "Übernehmen"), enters hand times and corrects lineups in the desktop, and
+  finally uploads everything with "Ins Web hochladen" (or exports a `.kido`).
 - **Ergebnisse & Druck** — WG rankings and Tagessieger computed locally with `kido-core`
   (identical to the web), print layout A4 (one WG per page). No web fonts — works offline.
 - **Keyboard shortcuts**: `1`–`4` focus a lane, `+`/`−` adjust the focused lane by ±5 s, `C` clears the
@@ -46,7 +51,15 @@ desktop/   (inside the kido-timer monorepo)
 │   │   ├── protocol.rs      # 41-byte frame parser
 │   │   ├── serial_reader.rs # serial thread + sync
 │   │   ├── file_reader.rs   # hex-dump replay
-│   │   └── dto.rs           # serializable shapes for the frontend
+│   │   ├── dto.rs           # serializable shapes for the frontend
+│   │   ├── cloud/           # web API client, live sync, .kido, upload (A2/A3)
+│   │   └── local/           # local result store (format 2) + on-prem
+│   │       ├── store.rs     #   base snapshot + overlays (timing, penalties, lineups, hand times)
+│   │       ├── persist.rs   #   atomic JSON persistence, format 1 → 2 migration
+│   │       ├── judge.rs     #   judge API handlers (pure, mirror the backend)
+│   │       ├── organizer.rs #   review / Übernehmen / hand times / lineup / current runs
+│   │       └── server/      #   axum server, embedded judge UI, rate limit, QR, LAN IPs
+│   ├── windows/installer-hooks.nsh  # NSIS: firewall rule for TCP 8787–8797
 │   ├── capabilities/        # Tauri 2 permission grants
 │   ├── icons/               # bundle icons
 │   ├── Cargo.toml
@@ -67,8 +80,14 @@ desktop/   (inside the kido-timer monorepo)
 
 ```bash
 npm install
+(cd ../frontend && npm ci && npm run build:judge)   # judge UI for on-prem (optional)
 npm run tauri dev
 ```
+
+The judge UI (`frontend/dist-judge`, built with `npm run build:judge`) is embedded into the
+binary at compile time by `src-tauri/build.rs`. Without it, `cargo build` still works and the
+server shows a placeholder page ("Strafrichter-App nicht enthalten"); CI and the release
+workflow always build it first. `KIDO_JUDGE_DIST=/path` overrides the folder.
 
 The Vite dev server runs on `localhost:5173` and Tauri loads it inside a native webview window.
 
@@ -94,8 +113,56 @@ Outputs land under `src-tauri/target/release/bundle/`. On Windows that's an `.ms
 
 ```bash
 npm test                                   # vitest (pure TS logic)
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml   # incl. an HTTP end-to-end test of the judge server
+make desktop-check                         # from the repo root: judge build + all desktop gates
 ```
+
+## On-prem: Strafrichter im lokalen Netz
+
+When the effective mode of the loaded discipline is **On-prem** (web default `offline` or the
+desktop override), the app starts a small HTTP server:
+
+- binds `0.0.0.0:8787` (if busy: 8788 … 8797) and shows all LAN IPv4 addresses with a QR code
+  `http://<laptop-ip>:<port>/judge/?t=<Zugangscode>&o=<owner>` on the screen
+  "Strafrichter & Prüfung",
+- serves the same judge app as the web (`/judge/`) and the judge API
+  (`/api/catalogue`, `/api/decider/{owner}/{token}/…`) with the web's JSON shapes and rules,
+- the access code (128 bit) is kept with the local store per discipline — phones keep working
+  after a restart. "Neuer Zugangscode" rotates it (old phones get "Zugangscode ungültig"),
+- plain HTTP in the LAN, 64 KiB body limit, per-IP rate limit; stops when leaving on-prem,
+  closing the discipline or quitting the app.
+
+Phones and laptop must be in the same network. Guest WLANs often isolate clients — use a
+normal WLAN / a travel router. If no phone has connected one minute after the start, the
+screen shows a hint (firewall / network).
+
+After the competition: **"Ins Web hochladen"** (needs internet + paired account) sends all
+locally changed runs (time, status, lineup, hand times) and all penalties incl. review status
+in one request; uploading twice is harmless. Optionally switch to live right after. Without
+internet: export a `.kido` file (contains all penalties and run fields) and import it on the web.
+
+### Windows-Firewall
+
+The NSIS installer (`*-setup.exe`) adds an inbound rule for the app on install and removes it
+on uninstall:
+
+```
+netsh advfirewall firewall add rule name="KiDo-Timer On-prem (Strafrichter)" dir=in action=allow ^
+  protocol=TCP localport=8787-8797 profile=private,public program="C:\Program Files\KiDo-Timer\KiDo-Timer.exe" enable=yes
+```
+
+**Manual fallback** (MSI install, rule deleted, or a third-party firewall): open an
+administrator command prompt and run the command above with the path of the installed exe,
+or in "Windows Defender Firewall mit erweiterter Sicherheit" → Eingehende Regeln → Neue Regel →
+Programm → `KiDo-Timer.exe` → Verbindung zulassen → Privat + Öffentlich. Alternatively allow the
+app when Windows asks on the first start of the on-prem server ("Zugriff zulassen", tick
+private *and* public networks). To remove the rule:
+
+```
+netsh advfirewall firewall delete rule name="KiDo-Timer On-prem (Strafrichter)"
+```
+
+macOS asks once whether the app may accept incoming connections — choose "Erlauben".
 
 ## Protocol
 

@@ -53,7 +53,10 @@ Schema history:
   only; v3 files are rejected with `400 validation` ("veraltetes Schema
   v3 … erwartet v4"). The desktop app reads and writes v4 only since
   0.6.0 (older envelopes, payloads, live snapshots and local backups are
-  rejected with "Bitte Web-App/Desktop aktualisieren").
+  rejected with "Bitte Web-App/Desktop aktualisieren"). Since desktop
+  0.7.0 the desktop also reads and writes `penalties` (all penalties incl.
+  pending / rejected, PR 6 contract A1; additive — a missing field falls
+  back to `approved_penalties`).
 
 ### 2.1 Signing rule
 
@@ -239,37 +242,79 @@ Missing fields read as: `current_run_ids` → `[current_run_id]`;
 The live endpoints `GET /api/export/events` and `GET /api/export/disciplines`
 additionally return `current_run_ids` and `lane_count` / `judge_mode`.
 
-### 2.6 Desktop local result store (0.6.0)
+### 2.6 Desktop local result store (0.6.0, format 2 since 0.7.0)
 
 The desktop keeps its own copy of the loaded discipline so no result is
 lost — neither on-prem nor when a live POST fails or the app crashes.
 
 - **Model**: `base` = last snapshot from the web (picker / live poll) or
-  from a `.kido` file; `run_edits` = run timing changes recorded on the
-  desktop that the web has not acknowledged. The UI, the results and the
-  `.kido` export use base + edits.
-- **Live**: every change is posted (`POST …/runs/:run_id/result`); the
-  edit is dropped when the POST succeeds, kept (and queued as failed
-  post) when it fails. Polls never hide a local edit.
+  from a `.kido` file; on top of it **overlays** the web has not
+  acknowledged: `run_edits` (timing), `run_extras` (lineup, hand times),
+  `penalty_edits` (full penalty rows incl. status, id = judge client id)
+  and `current_run_ids` (organizer's current runs, on-prem only, never
+  uploaded). The UI, the judge API, the results and the `.kido` export
+  use base + overlays (`approved_penalties` is recomputed from
+  `penalties`).
+- **Penalties**: readers use `penalties` (A1, all statuses); a snapshot
+  or file without `penalties` falls back to `approved_penalties`.
+- **Live**: every timing change is posted (`POST …/runs/:run_id/result`);
+  the edit is dropped when the POST succeeds, kept (and queued as failed
+  post) when it fails. Polls never hide a local edit. Choosing "Live" on
+  the desktop while the web is `offline` first calls
+  `POST /api/export/disciplines/{id}/sync-mode {"sync_mode":"live"}` (A2)
+  so result POSTs are not rejected with `409`.
 - **On-prem** (`sync_mode = offline`, web default or desktop override):
-  nothing is posted; edits are the master copy and end up in the `.kido`
-  export (status, `original_time_ms`, `started_at`, `ended_at`).
-- **Back to live**: if local edits differ from the web (status/time),
-  posting stops and the operator chooses "Lokale Ergebnisse hochladen"
-  (one result POST per run, in run-number order) or "Lokale Änderungen
-  verwerfen". Penalties / lineups are not uploaded yet (on-prem PR).
-  Note: the web rejects result POSTs with `409` while the discipline is
-  set to `offline` on the web — switch it to live there first.
+  nothing is posted; overlays are the master copy. The local judge server
+  (§2.7) and the organizer screen write into them.
+- **Back to live / upload**: if local changes differ from the web,
+  posting stops and the operator chooses "Lokale Änderungen hochladen" or
+  "Lokale Änderungen verwerfen". Uploading (also the on-prem button "Ins
+  Web hochladen") = one `POST /api/export/disciplines/{id}/onprem-upload`
+  (A3) with the changed runs (A3 field set), **all** penalties of the
+  view and `current_run_ids: []`; the desktop first refreshes its base
+  from the web. On success the uploaded state becomes the base; overlays
+  recorded meanwhile (a phone submitted during the upload) stay.
 - **Persistence**: JSON under the Tauri app data dir,
   `<app_data>/local-store/disciplines/<discipline_id>.json`
-  (`{ format: 1, saved_at, effective_mode, store: { base, run_edits },
-  failed_posts }`) plus `local-store/current.json` (discipline restored on
-  start). Written atomically (tmp + rename) after every change; files are
+  (`{ format: 2, saved_at, effective_mode, store: { base, run_edits,
+  run_extras, penalty_edits, current_run_ids, onprem_token,
+  last_upload_at }, failed_posts }`) plus `local-store/current.json`
+  (discipline restored on start). Format-1 files (0.6.0) load unchanged
+  (new fields default to empty) and are written back as format 2.
+  Written atomically (tmp + fsync + rename) after every change; files are
   kept per discipline, unreadable files are moved aside as
   `<id>.broken-<unix>.json`, never overwritten.
 - **Sync-mode override**: stored per discipline in the desktop's
   localStorage (`kido-timer:sync-overrides:v1`); choosing the web default
   removes the override.
+
+### 2.7 On-prem judge server (desktop 0.7.0)
+
+Contract: `docs/contract-pr6-onprem.md` §B–F.
+
+- Runs only while a discipline is loaded and the effective mode is
+  on-prem; binds `0.0.0.0:8787` (fallback 8788…8797), axum on the Tauri
+  tokio runtime, graceful shutdown on mode change / close / app exit.
+- QR code / link: `http://<lan-ip>:<port>/judge/?t=<token>&o=<owner_sub>`
+  (all non-loopback, non-link-local IPv4 addresses, private ranges
+  first). `token` = 128-bit hex access code per discipline, stored in the
+  local store (survives restarts), rotated with "Neuer Zugangscode".
+- Serves the embedded static judge build (`frontend/dist-judge`, base
+  `/judge/`; the server injects `window.__KIDO_API_BASE__ = ""` and
+  `window.__KIDO_OWNER_SUB__`), `/login` (target of the judge app's 401
+  redirect: "Zugangscode ungültig"), and the judge API with the web's
+  shapes and validation: `GET /api/catalogue`,
+  `GET /api/decider/{owner}/{token}/state?station=`,
+  `POST …/penalties`, `DELETE …/penalties/{id}?station=`,
+  `PUT …/runs/{run_id}/lineup`. Wrong token → `401`, unknown owner →
+  `404`; `disabled` is always `false`. A judge withdrawing a penalty that
+  the web already knows marks it `rejected` (`reviewed_by = "Strafrichter
+  (zurückgezogen)"`) because the upload can only upsert.
+- 64 KiB body limit, per-IP token bucket (burst 60, 10 req/s) → `429
+  rate_limited`. No CORS (same origin), plain HTTP.
+- Windows: the NSIS installer adds/removes the inbound firewall rule
+  "KiDo-Timer On-prem (Strafrichter)" (TCP 8787–8797, private + public);
+  manual fallback in `desktop/README.md`.
 
 ---
 
