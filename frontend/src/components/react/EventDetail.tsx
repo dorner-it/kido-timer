@@ -28,6 +28,7 @@ import TeamRoster from './TeamRoster';
 import PenaltiesPanel from './PenaltiesPanel';
 import EntriesPanel from './EntriesPanel';
 import RunsPanel from './RunsPanel';
+import { useDialog } from './useDialog';
 
 type Tab = 'disciplines' | 'roster' | 'entries' | 'runs' | 'penalties' | 'deciders';
 
@@ -39,6 +40,7 @@ export default function EventDetail({ id }: Props) {
   const [data, setData] = useState<EventDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('disciplines');
+  const { confirm, dialog } = useDialog();
 
   useEffect(() => {
     refresh();
@@ -63,13 +65,16 @@ export default function EventDetail({ id }: Props) {
   };
 
   const removeEvent = async () => {
-    if (
-      !confirm(
-        'Veranstaltung endgültig löschen? Alle Wettkämpfe, Mannschaften, Läufer, Läufe und Strafen werden mit gelöscht.',
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: 'Veranstaltung löschen?',
+      message: [
+        `„${data?.event.name ?? 'Diese Veranstaltung'}“ wird endgültig gelöscht.`,
+        'Alle Wettkämpfe, Mannschaften, Läufer, Läufe und Strafen werden mit gelöscht.',
+      ],
+      confirmLabel: 'Endgültig löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiClient.events.remove(id);
       window.location.href = '/events';
@@ -156,6 +161,7 @@ export default function EventDetail({ id }: Props) {
       {tab === 'runs' && <RunsPanel data={data} onChange={refresh} />}
       {tab === 'penalties' && <PenaltiesPanel data={data} onChange={refresh} />}
       {tab === 'deciders' && <DecidersPanel data={data} onChange={refresh} />}
+      {dialog}
     </main>
   );
 }
@@ -197,6 +203,7 @@ function DisciplinesPanel({
   const { event, disciplines, teams } = data;
   const [creating, setCreating] = useState(false);
   const [conflictWarning, setConflictWarning] = useState<string | null>(null);
+  const { confirm, dialog } = useDialog();
 
   const showConflicts = (saved: DisciplineSaveResponse) => {
     const ids = saved.lane_conflicts ?? [];
@@ -284,7 +291,13 @@ function DisciplinesPanel({
                   onChange();
                 }}
                 onRemove={async () => {
-                  if (!confirm(`Wettkampf „${d.name}" löschen?`)) return;
+                  const ok = await confirm({
+                    title: 'Wettkampf löschen?',
+                    message: `„${d.name}“ wird gelöscht.`,
+                    confirmLabel: 'Löschen',
+                    tone: 'danger',
+                  });
+                  if (!ok) return;
                   await apiClient.disciplines.remove(event.id, d.id);
                   onChange();
                 }}
@@ -297,6 +310,7 @@ function DisciplinesPanel({
           ))}
         </ul>
       )}
+      {dialog}
     </section>
   );
 }
@@ -579,6 +593,7 @@ function DecidersPanel({
 }) {
   const { event } = data;
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useDialog();
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   // 2027 judge app: one shared station token, station picked in the app.
   const stationUrl = event.station_token
@@ -586,11 +601,14 @@ function DecidersPanel({
     : '';
 
   const rotate = async () => {
-    if (
-      !confirm('Decider-Codes wirklich neu generieren? Bisherige QR-Codes werden ungültig.')
-    ) {
-      return;
-    }
+    if (busy) return;
+    const ok = await confirm({
+      title: 'Decider-Codes neu generieren?',
+      message: 'Bisherige QR-Codes werden ungültig und müssen neu verteilt werden.',
+      confirmLabel: 'Neu generieren',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await apiClient.events.rotateDeciderTokens(event.id);
@@ -675,6 +693,7 @@ function DecidersPanel({
           {busy ? 'Rotiere …' : 'Codes neu generieren'}
         </button>
       </div>
+      {dialog}
     </section>
   );
 }

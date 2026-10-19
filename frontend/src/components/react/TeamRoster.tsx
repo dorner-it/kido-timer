@@ -9,6 +9,7 @@ import {
   type Team,
 } from '../../lib/api';
 import { rostersByTeam } from '../../lib/lineup';
+import { useDialog } from './useDialog';
 
 interface Props {
   data: EventDetailData;
@@ -155,6 +156,7 @@ function TeamBlock({
   const [draft, setDraft] = useState<RunnerDraft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const { confirm, dialog } = useDialog();
   const firstNameRef = useRef<HTMLInputElement | null>(null);
 
   const nextPosition = (runners[runners.length - 1]?.position ?? 0) + 1;
@@ -173,13 +175,13 @@ function TeamBlock({
   };
 
   const removeTeam = async () => {
-    if (
-      !confirm(
-        `Mannschaft „${team.name}" löschen? Alle Läufer dieser Mannschaft werden mit gelöscht.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: 'Mannschaft löschen?',
+      message: [`„${team.name}“ wird gelöscht.`, 'Alle Läufer dieser Mannschaft werden mit gelöscht.'],
+      confirmLabel: 'Löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiClient.teams.remove(event_id, team.id);
       onChange();
@@ -313,6 +315,7 @@ function TeamBlock({
       )}
 
       {err && <p className="px-3 py-2 text-[12px] text-status-unknown">{err}</p>}
+      {dialog}
     </div>
   );
 }
@@ -331,6 +334,7 @@ function RunnerRow({
   onError: (message: string | null) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useDialog();
 
   /**
    * Saves the row and reloads the whole event afterwards (`onChange`).
@@ -362,7 +366,14 @@ function RunnerRow({
   };
 
   const remove = async () => {
-    if (!confirm(`Läufer „${runner.first_name} ${runner.last_name}" löschen?`)) return;
+    if (busy) return;
+    const ok = await confirm({
+      title: 'Läufer löschen?',
+      message: `„${runner.first_name} ${runner.last_name}“ wird aus der Mannschaft entfernt.`,
+      confirmLabel: 'Löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await apiClient.runners.remove(event_id, team_id, runner.id);
@@ -417,6 +428,7 @@ function RunnerRow({
           ✕
         </button>
       </div>
+      {dialog}
     </div>
   );
 }

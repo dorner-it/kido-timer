@@ -33,6 +33,7 @@ import {
   wgOptionLabel,
   wgWarningTooltip,
 } from '../../lib/wg';
+import { useDialog } from './useDialog';
 
 interface Props {
   data: EventDetailData;
@@ -150,6 +151,7 @@ function DisciplineEntriesBlock({
 }) {
   const wantsLanes = showsLanePicker(laneCount);
   const [addOpen, setAddOpen] = useState(false);
+  const { confirm, dialog } = useDialog();
   const conflicts = laneConflicts(entries, laneCount);
 
   const upsert = async (entry: TeamEntryInput): Promise<boolean> => {
@@ -165,7 +167,14 @@ function DisciplineEntriesBlock({
   };
 
   const remove = async (team_id: string) => {
-    if (!confirm('Meldung entfernen?')) return;
+    const teamName = teamById.get(team_id)?.name ?? 'Die Mannschaft';
+    const ok = await confirm({
+      title: 'Meldung entfernen?',
+      message: `„${teamName}“ wird aus „${discipline.name}“ abgemeldet.`,
+      confirmLabel: 'Entfernen',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await apiClient.teamEntries.remove(event_id, discipline.id, team_id);
       onChange();
@@ -287,6 +296,7 @@ function DisciplineEntriesBlock({
           </tbody>
         </table>
       )}
+      {dialog}
     </div>
   );
 }

@@ -68,6 +68,7 @@ import {
 import { Brandmark } from '../Brandmark';
 import { EntryDialog, ErrorPad } from './ErrorPad';
 import { InvalidAccessScreen } from './InvalidAccessScreen';
+import { useJudgeDialog } from './JudgeDialog';
 import JudgeLogin from './JudgeLogin';
 import { LineupPanel } from './LineupPanel';
 import { SubmissionList } from './SubmissionList';
@@ -119,6 +120,7 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
     invalidRef.current = true;
     setInvalid(true);
   }, []);
+  const { confirm, dialog } = useJudgeDialog();
 
   const stationRef = useRef(session.station);
   stationRef.current = session.station;
@@ -465,9 +467,14 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
     if (eventId) saveJudgeSession(eventId, next);
   };
 
-  const changeLogin = () => {
+  const changeLogin = async () => {
     if (!eventId) return;
-    if (!window.confirm('Station/Bahn wechseln?')) return;
+    const ok = await confirm({
+      title: 'Station/Bahn wechseln?',
+      message: 'Deine aktuelle Auswahl wird zurückgesetzt, danach wählst du Station und Bahn neu.',
+      confirmLabel: 'Wechseln',
+    });
+    if (!ok) return;
     clearJudgeSession(eventId);
     setSession(EMPTY_SESSION);
     setFlow({ step: 'idle' });
@@ -529,7 +536,7 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
         {session.station && (
           <button
             type="button"
-            onClick={changeLogin}
+            onClick={() => void changeLogin()}
             className="mt-2 min-h-[40px] rounded-lg border-2 border-ink-300 px-3 text-[13px] font-semibold text-ink-100"
           >
             Station/Bahn wechseln
@@ -660,6 +667,7 @@ export default function JudgeApp({ ownerSub, token }: JudgeAppProps) {
         onChoose={onChoose}
         onCancel={() => setFlow(cancelEntry() as EntryFlow<CatalogueEntry>)}
       />
+      {dialog}
     </div>
   );
 }
