@@ -25,7 +25,7 @@ jobs:
             tauri_target: x86_64-pc-windows-msvc
             extra_args: ''
           - label: macOS
-            runner: macos-14
+            runner: blacksmith-6vcpu-macos-15
             rust_target: aarch64-apple-darwin,x86_64-apple-darwin
             tauri_target: universal-apple-darwin
             extra_args: ''
