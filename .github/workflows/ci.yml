@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  core:
+    name: kido-core (fmt + clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'crates/kido-core -> target'
+      - working-directory: crates/kido-core
+        run: cargo fmt --check
+      - working-directory: crates/kido-core
+        run: cargo clippy --all-targets -- -D warnings
+      - working-directory: crates/kido-core
+        run: cargo test
+
   backend:
     name: Backend (cargo test)
     runs-on: ubuntu-latest
@@ -24,6 +42,21 @@ jobs:
       - name: cargo test
         working-directory: backend
         run: cargo test
+
+  frontend-tests:
+    name: Frontend (vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci
+      - working-directory: frontend
+        run: npm test
 
   frontend:
     name: Frontend (astro check + build)

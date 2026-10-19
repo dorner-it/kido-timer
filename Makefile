@@ -51,7 +51,13 @@ desktop-check:
 	cd desktop && npm run build
 	cd desktop/src-tauri && cargo check --all-targets && cargo test
 
-check-all: backend-check backend-test frontend-check frontend-build desktop-check
+core-test:
+	cd crates/kido-core && cargo clippy --all-targets -- -D warnings && cargo test
+
+frontend-test:
+	cd frontend && npm test
+
+check-all: core-test frontend-test backend-check backend-test frontend-check frontend-build desktop-check
 
 # ----- quality -----
 

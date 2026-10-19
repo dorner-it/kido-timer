@@ -166,6 +166,11 @@ pub async fn bulk_approve(
     }))
 }
 
+/// Writes the sum of approved `delta_ms` into `Run.correction_ms`.
+/// Legacy display value for pre-2027 clients only — scoring
+/// (`kido_core::scoring`) never reads `correction_ms` and adds 15 s per
+/// counting SZ itself, so penalties are not counted twice
+/// (see docs/contract-pr1-2027.md).
 async fn recompute_run_correction(
     state: &AppState,
     event_id: Uuid,

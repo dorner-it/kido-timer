@@ -156,6 +156,16 @@ New fields:
   same pattern as v2→v3).
 - Desktop catches up in a later PR (it is still on v2).
 
+## `Run.correction_ms` (legacy, not used for scoring)
+
+`correction_ms` keeps its pre-2027 meaning for old clients: the backend
+writes the sum of approved `delta_ms` of the run into it on every
+approve/reject/bulk-approve. **Scoring never reads it**: the result is
+always `measured + 15 s × counting SZ` (`kido_core::scoring`), where
+`measured = original_time_ms` (light barrier) or the hand-time mean. So
+SZ cannot be counted twice. The hand-times endpoint resets it to 0; the
+next review recomputes it — harmless, because it is display-only.
+
 ## Results (kido-core only in PR 1)
 
 `kido_core::scoring::compute_results` is implemented and tested in PR 1;
