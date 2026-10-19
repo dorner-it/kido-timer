@@ -190,6 +190,95 @@ The run must be one of `current_run_ids` (`409 conflict`). Same lineup rules as 
 
 Legacy slot route `POST /api/decider/{owner_sub}/{slot}/{token}/penalties` keeps working: writes `kind = sz`, `code = null`, `delta_ms` as sent. It needs exactly one current run (several → `409 conflict`).
 
+## Desktop export — on-prem (PR 6)
+
+Contract: [contract-pr6-onprem.md](./contract-pr6-onprem.md) §A. All three
+use `X-API-Key` like the rest of `/api/export/*`; a discipline that does
+not exist or belongs to another account → `404 not_found`. Flow and
+desktop-side details: [desktop-integration.md](./desktop-integration.md) §3.2 / §4.4.
+
+### All penalties in the snapshot and `.kido` (A1)
+
+`GET /api/export/disciplines/{id}` and the `.kido` payload carry
+`penalties: [Penalty, …]` — **all** penalties of the discipline
+(pending, approved, rejected), oldest first. `approved_penalties` is
+unchanged. Additive within `schema_version: 4`; readers default a
+missing `penalties` to `[]`.
+
+`POST /api/events/{id}/disciplines/{discipline_id}/import-results`
+(organizer, `.kido` upload) reads `penalties` when the file has any:
+upsert by id with "most advanced status wins" (see the upload rules
+below); rows that fail validation are skipped and counted in
+`penalties_skipped`; legacy `correction_ms` of the touched runs is
+recomputed. Files without `penalties` use `approved_penalties` as
+before (imported as approved).
+
+### `POST /api/export/disciplines/{id}/sync-mode` (A2)
+
+```jsonc
+{ "sync_mode": "live" }   // | "offline" ("on_prem" accepted as alias)
+```
+
+→ `200` with the updated `Discipline`. Same semantics as the organizer
+route `POST /api/events/{id}/disciplines/{did}/sync-mode`.
+
+### `POST /api/export/disciplines/{id}/onprem-upload` (A3)
+
+```jsonc
+{
+  "runs": [ {                        // only runs the desktop changed
+    "id": "<uuid>", "run_number": 1, "status": "completed",
+    "original_time_ms": 47230, "started_at": "…", "ended_at": "…",
+    "lineup": ["<runner uuid>"], "lineup_confirmed_at": "…", "lineup_confirmed_by": "startlinie",
+    "time_source": "lichtschranke", "hand_time_1_ms": null, "hand_time_2_ms": null
+  } ],
+  "penalties": [ Penalty ],          // full rows incl. status / reviewed_*; id = client id
+  "current_run_ids": []              // optional
+}
+```
+
+→ `200 { "runs_updated": n, "penalties_upserted": m }` — the number of
+runs / penalties in the request that were applied (including rows that
+were already identical). Allowed regardless of the discipline's
+`sync_mode`.
+
+- **All-or-nothing validation**: any invalid row → `400 validation`
+  before anything is written.
+- **Runs** (updated by id, only the fields above): the run must belong
+  to the discipline; `run_number` must match the stored run; lineup ids
+  must belong to the run's team, no duplicates (an empty lineup clears
+  `lineup_confirmed_*`); `time_source = handstopp` needs both hand times
+  > 0 and `original_time_ms` is stored as their mean
+  (`hand_time_mean`; a different `original_time_ms` → `400`);
+  `lichtschranke` must not carry hand times. Duplicate run ids → `400`.
+- **Penalties** (upsert by id): `event_id` / `discipline_id` must be
+  this discipline's, the id must not exist under another discipline,
+  `run_id` must be a run of the discipline (and the same run as a stored
+  row); `team_id` / `runner_id` are taken from the run. `code` must exist
+  in the catalogue and belong to `station` (missing `station` → taken
+  from the catalogue; station must be valid for the mode); `kind`,
+  `delta_ms`, `is_disqualification` are recomputed from the catalogue,
+  client values are ignored. Rows without `code` (legacy) are accepted
+  only if already stored; their content is kept and only the review
+  state merges. A stored row keeps its `created_at`. Duplicate ids →
+  `400`.
+- **Status precedence** ("most advanced status wins"): `approved` /
+  `rejected` beat `pending` in both directions. If both sides are
+  reviewed, the stored (web) row is kept; approved vs rejected is logged
+  as a warning. A reviewed row without `reviewed_at` / `reviewed_by`
+  gets the upload time / `"onprem-upload"`.
+- **Legacy `correction_ms`** of every affected run (uploaded runs and
+  runs of uploaded penalties) is recomputed as the sum of the approved
+  penalties' `delta_ms`.
+- **`current_run_ids`**: non-empty → validated like
+  `POST /api/events/{id}/current` (runs of this discipline, ≤
+  `lane_count`, no duplicates) and set, with this discipline as the
+  event's current discipline. Omitted or `[]` → the event's current runs
+  are cleared, but only if this discipline is the event's current one.
+- **Idempotent**: only rows that actually change are written
+  (`updated_at` moves only then), so uploading the same body twice
+  leaves the same state.
+
 ## Schema versioning
 
 The desktop-app export contract is versioned via a top-level `"schema_version"` integer (and the `.kido` envelope `v`). Any breaking change to `/api/export/*` requires bumping this value and coordinating a desktop-app release. Current value: `4` (Gruppenstafette 2027). Imports of older files (v3 and below) are rejected with `400 validation` and a message naming both versions.

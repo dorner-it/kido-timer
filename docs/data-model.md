@@ -33,3 +33,14 @@ No key changed. New attributes are optional on read (`#[serde(default)]` in the 
 Kept for old readers: Penalty `is_disqualification` (always written as `kind == fv`) and `delta_ms`; Event `current_run_id`; Runner `gender` (optional, no longer written by the UI).
 
 TeamEntry `wg_warnings` is **not** stored — it is computed on every read.
+
+## On-prem round trip (PR 6)
+
+No new attributes and no key change. `POST /api/export/disciplines/{id}/onprem-upload`
+and the `.kido` import write ordinary Run / Penalty items (full `PutItem`,
+so `GSI1SK` follows the new run / penalty status) and, for
+`current_run_ids`, the Event META item. Penalties uploaded from the
+desktop keep their client id as `id` (SK `…PENALTY#<discipline>#<id>`), so
+re-uploads overwrite the same item. `reviewed_by` may carry the
+sentinels `"onprem-upload"` (reviewed on the desktop without a reviewer
+name) or `"offline-import"` (legacy `approved_penalties` import).

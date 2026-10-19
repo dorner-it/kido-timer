@@ -33,6 +33,9 @@
 //!   `judge_mode`, Event `current_run_ids`, Run `lineup*` /
 //!   `time_source` / `hand_time_*`, TeamEntry `wg` (input) +
 //!   `wg_history`, Penalty `kind` / `code` and canonical station keys.
+//!   Additive (PR 6, on-prem): `penalties` = **all** penalties of the
+//!   discipline (pending, approved, rejected) next to the unchanged
+//!   `approved_penalties`; readers default it to `[]`.
 //!
 //! Older envelopes/payloads cannot be imported — clients must update.
 
@@ -115,8 +118,14 @@ pub struct DisciplinePayload {
     pub team_entries: Vec<TeamEntry>,
     /// Pre-filtered to this discipline only.
     pub runs: Vec<Run>,
-    /// Pre-filtered to this discipline only, status = Approved.
+    /// Pre-filtered to this discipline only, status = Approved. Kept
+    /// unchanged for old readers.
     pub approved_penalties: Vec<Penalty>,
+    /// All penalties of this discipline (pending, approved, rejected),
+    /// ordered by `created_at`. Additive in v4 (PR 6); missing in older
+    /// files → `[]`.
+    #[serde(default)]
+    pub penalties: Vec<Penalty>,
 }
 
 // ===== Envelope =====
@@ -156,12 +165,14 @@ pub async fn build_discipline_payload(
     let runner_list = runners::list_for_event(&state.db, event.id).await?;
     let entry_list = team_entries::list_for_discipline(&state.db, event.id, discipline.id).await?;
     let run_list = runs::list_for_discipline(&state.db, event.id, discipline.id).await?;
-    let approved: Vec<Penalty> =
-        penalties::list_by_status(&state.db, event.id, PenaltyStatus::Approved)
-            .await?
-            .into_iter()
-            .filter(|p| p.discipline_id == discipline.id)
-            .collect();
+    let mut all_penalties =
+        penalties::list_for_discipline(&state.db, event.id, discipline.id).await?;
+    all_penalties.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+    let approved: Vec<Penalty> = all_penalties
+        .iter()
+        .filter(|p| p.status == PenaltyStatus::Approved)
+        .cloned()
+        .collect();
 
     Ok(DisciplinePayload {
         schema_version: SCHEMA_VERSION,
@@ -174,6 +185,7 @@ pub async fn build_discipline_payload(
         team_entries: entry_list,
         runs: run_list,
         approved_penalties: approved,
+        penalties: all_penalties,
     })
 }
 
@@ -331,7 +343,7 @@ mod tests {
             created_at: ts(),
             updated_at: ts(),
         };
-        DisciplinePayload {
+        let mut p = DisciplinePayload {
             schema_version: SCHEMA_VERSION,
             exported_at: ts(),
             owner_sub: "sub".into(),
@@ -426,7 +438,25 @@ mod tests {
                 reviewed_at: Some(ts()),
                 reviewed_by: Some("sub".into()),
             }],
-        }
+            penalties: Vec::new(),
+        };
+        // `penalties` = approved + a pending and a rejected one.
+        let mut pending = p.approved_penalties[0].clone();
+        pending.id = Uuid::new_v4();
+        pending.kind = PenaltyKind::Sz;
+        pending.is_disqualification = false;
+        pending.code = Some("knotengestell.ein_knoten_falsch".into());
+        pending.delta_ms = 15_000;
+        pending.status = PenaltyStatus::Pending;
+        pending.reviewed_at = None;
+        pending.reviewed_by = None;
+        let mut rejected = pending.clone();
+        rejected.id = Uuid::new_v4();
+        rejected.status = PenaltyStatus::Rejected;
+        rejected.reviewed_at = Some(ts());
+        rejected.reviewed_by = Some("sub".into());
+        p.penalties = vec![p.approved_penalties[0].clone(), pending, rejected];
+        p
     }
 
     /// Sign arbitrary payload JSON with an arbitrary envelope version
@@ -461,6 +491,7 @@ mod tests {
         assert_eq!(back.runs, p.runs);
         assert_eq!(back.team_entries, p.team_entries);
         assert_eq!(back.approved_penalties, p.approved_penalties);
+        assert_eq!(back.penalties, p.penalties);
         assert_eq!(back.event.current_run_ids, p.event.current_run_ids);
         assert_eq!(
             back.event.current_run_id,
@@ -491,6 +522,20 @@ mod tests {
         assert_eq!(pen["kind"], "fv");
         assert_eq!(pen["station"], "knotengestell");
         assert_eq!(pen["is_disqualification"], true);
+        let all = json["penalties"].as_array().expect("penalties array");
+        let statuses: Vec<&str> = all.iter().map(|p| p["status"].as_str().unwrap()).collect();
+        assert_eq!(statuses, vec!["approved", "pending", "rejected"]);
+    }
+
+    #[test]
+    fn v4_file_without_penalties_defaults_to_empty() {
+        // Files written before PR 6 carry only `approved_penalties`.
+        let mut p = serde_json::to_value(payload()).unwrap();
+        p.as_object_mut().unwrap().remove("penalties");
+        let env = sign_raw(&p, 4);
+        let back = verify(&key(), &env).unwrap();
+        assert!(back.penalties.is_empty());
+        assert_eq!(back.approved_penalties.len(), 1);
     }
 
     #[test]
