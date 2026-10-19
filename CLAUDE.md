@@ -489,7 +489,7 @@ Provide a `compose.yaml` at repo root that runs DynamoDB Local on port 8000 for 
 
 ## 11. Deployment
 
-- **Same AWS account and region as `../fms/`.** Terraform reuses the existing state bucket `dorner-it-fms-terraform-state` (key `ki-do-timer/terraform.tfstate`) and lock table `fms-terraform-locks`, and the existing GitHub OIDC provider in the account.
+- **Same AWS account and region as `../fms/`.** Terraform reuses the existing state bucket `dorner-it-fms-terraform-state` (key `ki-do-timer/terraform.tfstate`, S3-native lock file `use_lockfile`), and the existing GitHub OIDC provider in the account.
 - Terraform provisions: DynamoDB table + GSI1, Cognito User Pool + App Client + Hosted UI domain, Lambda function (ARM64, `provided.al2023`), API Gateway HTTP API, CloudWatch Log Group, IAM least-privilege role, two GitHub Actions IAM roles (`ki-do-timer-github-actions` for Lambda deploy, `ki-do-timer-github-actions-terraform` for plan/apply).
 - Lambda binary built with `cargo lambda build --release --arm64 --output-format zip`.
 - **CI:** `.github/workflows/terraform.yaml` plans/applies on `infrastructure/**` changes. `.github/workflows/deploy-lambda.yaml` builds + uploads the Lambda zip on `backend/**` changes via `aws lambda update-function-code` (Terraform does not redeploy code, it only manages the function shape). Mirrors `../fms/` patterns.
@@ -553,7 +553,7 @@ When invoked in an empty directory with this file present:
 - **Auth:** AWS Cognito User Pool + Hosted UI. The web app holds zero password material. Confirmed 2026-05-02.
 - **TimerMode:** v3 set, discipline-specific — `Gruppenstaffette` (2 lanes) and `Loeschangriff` (4 lanes); see §4.2 and `docs/migration-timer-mode.md`. Old v1 strings are rejected with `400 validation`.
 - **Penalty granularity:** penalties attach to a `Run` row (a team running multiple heats has separate penalty buckets). Run mirrors the desktop app's `RunEntry` (`originalTimeMs` + `correctionMs`).
-- **AWS account & infra:** same account as `../fms/` (eu-central-1, state bucket `dorner-it-fms-terraform-state`, lock table `fms-terraform-locks`).
+- **AWS account & infra:** same account as `../fms/` (eu-central-1, state bucket `dorner-it-fms-terraform-state`, S3-native state lock via `use_lockfile`).
 - **CI:** Terraform plan/apply runs from GitHub Actions via OIDC. Lambda deploy runs from GitHub Actions on `backend/**` changes.
 - **Penalty vocabulary:** fixed error catalogue per station (`kido_core::catalogue`, served at `GET /api/catalogue`); penalties carry `kind` (SZ/FV) + `code`. Free-text `reason_code` is legacy. Decided 2026-10-16.
 - **GitHub repo:** `dorner-it/kido-timer` (public monorepo since 2026-10-16; merged from `dorner-it/ki-do-timer-web` + `dorner-it/kido-timer-app`, both histories preserved). Desktop releases are tagged `desktop-vX.Y.Z` and published here; the Tauri updater reads `releases/latest/download/latest.json` of this repo.

@@ -5,7 +5,7 @@ Terraform for the KI-DO Timer Web backend: DynamoDB single table, AWS Cognito Us
 State is shared with `../fms/`:
 
 - bucket: `dorner-it-fms-terraform-state` (key: `ki-do-timer/terraform.tfstate`)
-- lock table: `fms-terraform-locks`
+- state lock: S3-native lock file (`use_lockfile = true`, Terraform >= 1.10); the fms lock table `fms-terraform-locks` is no longer used
 
 The GitHub OIDC provider is shared too — referenced via `data` rather than recreated.
 

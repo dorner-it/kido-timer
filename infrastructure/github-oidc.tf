@@ -143,14 +143,12 @@ data "aws_iam_policy_document" "github_actions_terraform" {
     ]
   }
 
+  # S3-native state lock: the lock file `ki-do-timer/terraform.tfstate.tflock`
+  # is created with PutObject (above) and removed with DeleteObject.
   statement {
-    sid = "TerraformStateLock"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem",
-    ]
-    resources = ["arn:aws:dynamodb:${var.region}:*:table/fms-terraform-locks"]
+    sid       = "TerraformStateLockFile"
+    actions   = ["s3:DeleteObject"]
+    resources = ["arn:aws:s3:::dorner-it-fms-terraform-state/ki-do-timer/terraform.tfstate.tflock"]
   }
 }
 
