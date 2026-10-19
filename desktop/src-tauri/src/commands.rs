@@ -278,6 +278,25 @@ pub fn onprem_review_penalty(
     })
 }
 
+/// "Rückgängig": a decided error → pending again (until "Übernehmen").
+#[tauri::command]
+pub fn onprem_undo_review(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    penalty_id: Uuid,
+) -> Result<Penalty, String> {
+    state.cloud.organizer(&app_handle, |store, _, _| {
+        organizer::undo_review(store, penalty_id)
+    })
+}
+
+/// Penalties whose decision comes from the web snapshot — the UI hides
+/// "Rückgängig" for them.
+#[tauri::command]
+pub fn onprem_web_decided_penalties(state: State<'_, AppState>) -> Vec<Uuid> {
+    state.cloud.web_decided_penalty_ids()
+}
+
 /// "Übernehmen": remaining pending errors of the run → approved.
 #[tauri::command]
 pub fn onprem_take_over(

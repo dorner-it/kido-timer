@@ -35,7 +35,8 @@ route `POST /api/events/{id}/disciplines/{did}/sync-mode`.
     "id": "<uuid>", "run_number": 1, "status": "completed",
     "original_time_ms": 47230, "started_at": "...", "ended_at": "...",
     "lineup": ["<runner uuid>"], "lineup_confirmed_at": "...", "lineup_confirmed_by": "startlinie|organizer",
-    "time_source": "lichtschranke|handstopp", "hand_time_1_ms": null, "hand_time_2_ms": null
+    "time_source": "lichtschranke|handstopp", "hand_time_1_ms": null, "hand_time_2_ms": null,
+    "penalties_accepted_at": null  // additive: local "Übernehmen"; later value wins, null never clears
   } ],
   "penalties": [ Penalty ],        // full rows incl. status/reviewed_*; id = client id from the judge phone
   "current_run_ids": []            // optional; cleared by default after an on-prem day
@@ -49,6 +50,11 @@ route `POST /api/events/{id}/disciplines/{did}/sync-mode`.
   `delta_ms` are recomputed from the catalogue (client values ignored).
 - After a successful upload `correction_ms` of affected runs is
   recomputed (legacy display value, see PR 1 contract).
+- Review undo ("Rückgängig", additive): the web never turns a decision
+  it already stores back to `pending` through an upload ("most advanced
+  status wins" stays). The desktop therefore only offers undo for
+  decisions made locally (its penalty overlay); decisions from the web
+  snapshot (base approved / rejected) are not undoable on the desktop.
 - Response `200 { "runs_updated": n, "penalties_upserted": m }`.
 - Allowed regardless of the web's `sync_mode`.
 
@@ -102,7 +108,10 @@ route `POST /api/events/{id}/disciplines/{did}/sync-mode`.
   `current_run_ids`.
 - Review per current run: errors by station, Bestätigen / Zurücknehmen,
   rejected crossed out, FV with confirm dialog, "Übernehmen" (pending →
-  approved), summary (same wording as web PR 3).
+  approved, sets local `Run.penalties_accepted_at`), "Rückgängig"
+  (decided → pending; only for decisions made on this desktop — not for
+  ones from the web snapshot — and only after the last "Übernehmen"),
+  summary (same wording as web PR 3).
 - Hand times (two inputs, mean via `kido_core::timing::hand_time_mean`),
   lineup correction.
 - Results/print (PR 5) use the local data.
@@ -115,7 +124,8 @@ route `POST /api/events/{id}/disciplines/{did}/sync-mode`.
 - Divergence dialog from PR 5 uses A3 instead of per-run result POSTs.
 - Desktop override "Live" calls A2 `live` first, so result POSTs are no
   longer rejected with 409.
-- `.kido` export includes `penalties` (A1) and all local run fields.
+- `.kido` export includes `penalties` (A1) and all local run fields
+  (incl. `penalties_accepted_at`).
 
 ## F. Windows firewall
 

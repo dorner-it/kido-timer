@@ -26,6 +26,7 @@ No key changed. New attributes are optional on read (`#[serde(default)]` in the 
 | Run | `lineup_confirmed_at` / `lineup_confirmed_by` | S / S `startlinie` \| `organizer` | `null` |
 | Run | `time_source` | S `lichtschranke` \| `handstopp` | `lichtschranke` |
 | Run | `hand_time_1_ms` / `hand_time_2_ms` | N | `null` |
+| Run | `penalties_accepted_at` | S (RFC 3339; last "Übernehmen", set by bulk-approve via `UpdateItem`) | `null` (nothing frozen — every decision can be undone) |
 | Penalty | `kind` | S `sz` \| `fv` | `is_disqualification ? fv : sz` |
 | Penalty | `code` | S (catalogue code) | `null` |
 | Penalty | `station` | S | legacy keys (`start`, `verteiler`, `strahlrohr`, `knoten`, `kuebelspritze`) read as the canonical key and are written canonically on the next save |

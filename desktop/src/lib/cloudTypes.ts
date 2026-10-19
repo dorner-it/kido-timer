@@ -156,6 +156,10 @@ export interface Run {
   time_source: TimeSource;
   hand_time_1_ms: number | null;
   hand_time_2_ms: number | null;
+  /** Letztes „Übernehmen“ (RFC 3339). Entscheidungen bis dahin sind
+   *  eingefroren; spätere lassen sich noch rückgängig machen. Fehlt bei
+   *  älteren Snapshots. */
+  penalties_accepted_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }

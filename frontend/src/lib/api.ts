@@ -242,6 +242,10 @@ export interface Run {
   time_source: TimeSource;
   hand_time_1_ms: number | null;
   hand_time_2_ms: number | null;
+  /** Last "Übernehmen" (bulk-approve). Decisions up to this instant are
+   *  frozen; later ones can still be undone. `null` until the first
+   *  Übernehmen (and on older backends / rows). */
+  penalties_accepted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -353,6 +357,8 @@ export interface BulkApproveResponse {
   approved: number;
   rejected: number;
   dq: number;
+  /** The run's new `penalties_accepted_at` (server clock). Missing on older backends. */
+  penalties_accepted_at?: string;
 }
 
 export interface ImportResultsResponse {
@@ -711,6 +717,14 @@ export const apiClient = {
       normalizePenalty(
         await request<unknown>(
           `/api/events/${event_id}/penalties/${penalty_id}/reject`,
+          { method: 'POST' },
+        ),
+      ),
+    /** "Rückgängig": decided → pending (409 once the run was taken over). */
+    undo: async (event_id: string, penalty_id: string) =>
+      normalizePenalty(
+        await request<unknown>(
+          `/api/events/${event_id}/penalties/${penalty_id}/undo`,
           { method: 'POST' },
         ),
       ),

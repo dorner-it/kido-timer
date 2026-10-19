@@ -70,6 +70,12 @@ pub struct Run {
     pub hand_time_1_ms: Option<u32>,
     #[serde(default)]
     pub hand_time_2_ms: Option<u32>,
+    /// Last "Übernehmen" (bulk-approve) of this run's penalties. Review
+    /// decisions made up to this instant are frozen; later ones can still
+    /// be undone (`kido_core::penalty::can_undo_review`). Additive in v4;
+    /// missing → `None`.
+    #[serde(default)]
+    pub penalties_accepted_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -103,6 +109,7 @@ mod tests {
         assert_eq!(r.time_source, TimeSource::Lichtschranke);
         assert_eq!(r.hand_time_1_ms, None);
         assert_eq!(r.hand_time_2_ms, None);
+        assert_eq!(r.penalties_accepted_at, None, "missing field reads as null");
         assert_eq!(r.original_time_ms, Some(47230));
         assert_eq!(r.correction_ms, 5000);
 
@@ -113,6 +120,8 @@ mod tests {
         assert_eq!(out["time_source"], "lichtschranke");
         assert_eq!(out["hand_time_1_ms"], serde_json::Value::Null);
         assert_eq!(out["hand_time_2_ms"], serde_json::Value::Null);
+        // Always present on output (null until the first "Übernehmen").
+        assert_eq!(out["penalties_accepted_at"], serde_json::Value::Null);
     }
 
     #[test]
@@ -137,6 +146,7 @@ mod tests {
             "time_source": "handstopp",
             "hand_time_1_ms": 47230,
             "hand_time_2_ms": 47245,
+            "penalties_accepted_at": "2027-06-12T10:05:00Z",
             "created_at": "2026-05-29T12:00:00Z",
             "updated_at": "2026-05-29T12:00:00Z"
         });
@@ -144,6 +154,10 @@ mod tests {
         assert_eq!(r.lineup, vec![runner]);
         assert_eq!(r.lineup_confirmed_by, Some(LineupConfirmedBy::Startlinie));
         assert_eq!(r.time_source, TimeSource::Handstopp);
+        assert_eq!(
+            r.penalties_accepted_at,
+            Some("2027-06-12T10:05:00Z".parse().unwrap())
+        );
         assert_eq!(serde_json::to_value(&r).unwrap(), j);
     }
 

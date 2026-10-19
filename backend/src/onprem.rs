@@ -76,6 +76,10 @@ pub struct UploadRun {
     pub hand_time_1_ms: Option<u32>,
     #[serde(default)]
     pub hand_time_2_ms: Option<u32>,
+    /// Last local "Übernehmen" of the run's penalties. Missing / `null`
+    /// never clears the stored value; the later of both wins.
+    #[serde(default)]
+    pub penalties_accepted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,10 +356,25 @@ pub fn apply_run_update(
     run.time_source = upload.time_source;
     run.hand_time_1_ms = upload.hand_time_1_ms;
     run.hand_time_2_ms = upload.hand_time_2_ms;
+    run.penalties_accepted_at =
+        merge_accepted_at(stored.penalties_accepted_at, upload.penalties_accepted_at);
     if run != *stored {
         run.updated_at = now;
     }
     Ok(run)
+}
+
+/// `Run.penalties_accepted_at` after an upload: the later of stored and
+/// uploaded; an upload without the field (older desktop) or with `null`
+/// keeps the stored value. "Übernehmen" only ever freezes more.
+pub fn merge_accepted_at(
+    stored: Option<DateTime<Utc>>,
+    uploaded: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (stored, uploaded) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// Legacy `Run.correction_ms`: sum of the approved penalties' `delta_ms`

@@ -349,6 +349,11 @@ pub struct Run {
     pub hand_time_1_ms: Option<u32>,
     #[serde(default)]
     pub hand_time_2_ms: Option<u32>,
+    /// Last "Übernehmen" of the run's penalties (RFC 3339). Decisions up
+    /// to this instant are frozen; later ones can still be undone
+    /// ("Rückgängig"). Additive in v4; missing → `None`.
+    #[serde(default)]
+    pub penalties_accepted_at: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -560,6 +565,10 @@ pub struct OnPremUploadRun {
     pub time_source: TimeSource,
     pub hand_time_1_ms: Option<u32>,
     pub hand_time_2_ms: Option<u32>,
+    /// Local "Übernehmen" timestamp. The web keeps the later of its own
+    /// and this one; `null` never clears it.
+    #[serde(default)]
+    pub penalties_accepted_at: Option<String>,
 }
 
 impl OnPremUploadRun {
@@ -577,6 +586,7 @@ impl OnPremUploadRun {
             time_source: run.time_source,
             hand_time_1_ms: run.hand_time_1_ms,
             hand_time_2_ms: run.hand_time_2_ms,
+            penalties_accepted_at: run.penalties_accepted_at.clone(),
         }
     }
 
@@ -592,6 +602,9 @@ impl OnPremUploadRun {
         run.time_source = self.time_source;
         run.hand_time_1_ms = self.hand_time_1_ms;
         run.hand_time_2_ms = self.hand_time_2_ms;
+        if self.penalties_accepted_at.is_some() {
+            run.penalties_accepted_at = self.penalties_accepted_at.clone();
+        }
     }
 }
 
@@ -938,10 +951,12 @@ mod tests {
             "time_source",
             "hand_time_1_ms",
             "hand_time_2_ms",
+            "penalties_accepted_at",
         ] {
             r.remove(k);
         }
         let p: DisciplinePayload = serde_json::from_value(v).unwrap();
+        assert_eq!(p.runs[0].penalties_accepted_at, None);
         assert!(p.runs[0].lineup.is_empty());
         assert_eq!(p.runs[0].time_source, TimeSource::Lichtschranke);
         assert_eq!(p.runs[0].hand_time_1_ms, None);
@@ -1100,10 +1115,11 @@ mod tests {
             "time_source",
             "hand_time_1_ms",
             "hand_time_2_ms",
+            "penalties_accepted_at",
         ] {
             assert!(run.get(key).is_some(), "missing {key}");
         }
-        assert_eq!(run.as_object().unwrap().len(), 12, "only A3 run fields");
+        assert_eq!(run.as_object().unwrap().len(), 13, "only A3 run fields");
         assert_eq!(run["lineup_confirmed_by"], "startlinie");
         assert_eq!(run["time_source"], "lichtschranke");
         assert_eq!(v["penalties"][0]["status"], "approved");
@@ -1130,10 +1146,36 @@ mod tests {
         src.time_source = TimeSource::Handstopp;
         src.hand_time_1_ms = Some(47_230);
         src.hand_time_2_ms = Some(47_245);
+        src.penalties_accepted_at = Some("2027-06-12T10:05:00.000Z".into());
         let up = OnPremUploadRun::from_run(&src);
         up.apply_to(&mut target);
         assert_eq!(OnPremUploadRun::from_run(&target), up);
         // Fields outside the upload stay.
         assert_eq!(target.team_id, p.runs[1].team_id);
+        // A run without a local Übernehmen never clears the timestamp.
+        let mut no_ts = up.clone();
+        no_ts.penalties_accepted_at = None;
+        no_ts.apply_to(&mut target);
+        assert_eq!(
+            target.penalties_accepted_at.as_deref(),
+            Some("2027-06-12T10:05:00.000Z")
+        );
+    }
+
+    #[test]
+    fn run_penalties_accepted_at_roundtrips() {
+        let mut v: Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        v["runs"][0]["penalties_accepted_at"] = "2027-06-12T10:05:00.123456789Z".into();
+        let p: DisciplinePayload = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            p.runs[0].penalties_accepted_at.as_deref(),
+            Some("2027-06-12T10:05:00.123456789Z")
+        );
+        let out = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            out["runs"][0]["penalties_accepted_at"],
+            "2027-06-12T10:05:00.123456789Z"
+        );
+        assert_eq!(out["runs"][1]["penalties_accepted_at"], Value::Null);
     }
 }

@@ -354,12 +354,20 @@ export default function App() {
   const reviewActions: ReviewActions = useMemo(
     () => ({
       reviewPenalty: cloud.reviewPenalty,
+      undoReview: cloud.undoReview,
       takeOver: cloud.takeOver,
       setLineup: cloud.setLineup,
       setHandTimes: cloud.setHandTimes,
       clearHandTimes: cloud.clearHandTimes,
     }),
-    [cloud.reviewPenalty, cloud.takeOver, cloud.setLineup, cloud.setHandTimes, cloud.clearHandTimes],
+    [
+      cloud.reviewPenalty,
+      cloud.undoReview,
+      cloud.takeOver,
+      cloud.setLineup,
+      cloud.setHandTimes,
+      cloud.clearHandTimes,
+    ],
   );
 
   const handleGoLiveAfterUpload = useCallback(async () => {

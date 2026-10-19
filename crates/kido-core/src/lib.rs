@@ -19,7 +19,7 @@ pub mod wg;
 
 pub use catalogue::{CATALOGUE, CatalogueEntry};
 pub use discipline::{JudgeMode, SyncMode, TimerMode};
-pub use penalty::{PenaltyKind, PenaltyStatus, SZ_PENALTY_MS};
+pub use penalty::{PenaltyKind, PenaltyStatus, SZ_PENALTY_MS, can_undo_review};
 pub use station::StationKind;
 pub use timing::TimeSource;
 pub use wg::Wertungsgruppe;

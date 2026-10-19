@@ -100,7 +100,8 @@ New fields on every run:
   "lineup_confirmed_by": "startlinie|organizer|null",
   "time_source": "lichtschranke",       // default
   "hand_time_1_ms": null,
-  "hand_time_2_ms": null
+  "hand_time_2_ms": null,
+  "penalties_accepted_at": null         // last "Übernehmen" (rfc3339); missing → null
 }
 ```
 
@@ -137,6 +138,20 @@ Both times are required (> 0) unless `clear: true`; `clear` together with times 
 ```
 
 Organizer review is unchanged: approve / reject / `POST /api/events/{id}/runs/{run_id}/penalties/bulk-approve` ("Übernehmen": remaining pending → approved; response `dq` counts approved FV).
+
+- `POST /api/events/{id}/runs/{run_id}/penalties/bulk-approve` also sets
+  `Run.penalties_accepted_at = now` on **every** press (the penalties it
+  approves get the same instant as `reviewed_at`) and returns it
+  additively: `{ "approved", "rejected", "dq", "penalties_accepted_at" }`.
+  Unknown run → `404`.
+- `POST /api/events/{id}/penalties/{penalty_id}/undo` ("Rückgängig",
+  organizer, same auth as approve / reject): decided → `pending`,
+  `reviewed_at` / `reviewed_by` cleared, legacy `correction_ms`
+  recomputed; returns the `Penalty`. Allowed iff `status != pending` and
+  (`run.penalties_accepted_at` is `null` or `reviewed_at >
+  penalties_accepted_at`) — `kido_core::penalty::can_undo_review`.
+  Otherwise `409 conflict` (still pending / frozen by "Übernehmen").
+  Approve / reject still `409` unless the penalty is pending.
 
 ### `GET /api/catalogue` (public, no auth, static)
 
@@ -295,7 +310,8 @@ route `POST /api/events/{id}/disciplines/{did}/sync-mode`.
     "id": "<uuid>", "run_number": 1, "status": "completed",
     "original_time_ms": 47230, "started_at": "…", "ended_at": "…",
     "lineup": ["<runner uuid>"], "lineup_confirmed_at": "…", "lineup_confirmed_by": "startlinie",
-    "time_source": "lichtschranke", "hand_time_1_ms": null, "hand_time_2_ms": null
+    "time_source": "lichtschranke", "hand_time_1_ms": null, "hand_time_2_ms": null,
+    "penalties_accepted_at": null    // optional; local "Übernehmen"
   } ],
   "penalties": [ Penalty ],          // full rows incl. status / reviewed_*; id = client id
   "current_run_ids": []              // optional
@@ -332,6 +348,13 @@ were already identical). Allowed regardless of the discipline's
   reviewed, the stored (web) row is kept; approved vs rejected is logged
   as a warning. A reviewed row without `reviewed_at` / `reviewed_by`
   gets the upload time / `"onprem-upload"`.
+- **`penalties_accepted_at`**: the later of stored and uploaded value;
+  missing / `null` keeps the stored value (never cleared by an upload).
+- **Undo on the desktop**: because a decision stored on the web never
+  goes back to `pending` through an upload, the desktop offers
+  "Rückgängig" only for decisions made locally on the desktop (not yet
+  uploaded); decisions that come from the web snapshot (base already
+  approved / rejected) are not undoable there.
 - **Legacy `correction_ms`** of every affected run (uploaded runs and
   runs of uploaded penalties) is recomputed as the sum of the approved
   penalties' `delta_ms`.

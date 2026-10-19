@@ -3,6 +3,9 @@ import type { CatalogueItem } from "../cloudTypes";
 import { catalogueIndex } from "../penalties";
 import {
   canReview,
+  canUndoOnDesktop,
+  canUndoReview,
+  compareInstants,
   groupByStation,
   needsFvConfirmation,
   penaltyLine,
@@ -182,5 +185,57 @@ describe("snapshot helpers", () => {
     ];
     expect(runsWithPendingErrors(s)).toEqual([RUN_B1]);
     expect(runsWithPendingErrors(null)).toEqual([]);
+  });
+});
+
+describe("canUndoReview (mirror of kido_core::penalty::can_undo_review)", () => {
+  const acc = "2027-06-12T10:00:00.000Z";
+  const r = (penalties_accepted_at: string | null | undefined) => ({ penalties_accepted_at });
+
+  it("pending → never", () => {
+    expect(canUndoReview(penalty("p", "sz", "pending"), r(null))).toBe(false);
+    expect(canUndoReview(penalty("p", "sz", "pending", { reviewed_at: "2027-06-12T11:00:00Z" }), r(acc))).toBe(false);
+  });
+
+  it("no Übernehmen yet → every decision (also older snapshots without the field)", () => {
+    expect(canUndoReview(penalty("p", "sz", "approved", { reviewed_at: acc }), r(null))).toBe(true);
+    expect(canUndoReview(penalty("p", "fv", "rejected", { reviewed_at: acc }), r(undefined))).toBe(true);
+    expect(canUndoReview(penalty("p", "sz", "approved"), r(null))).toBe(true);
+  });
+
+  it("decided before or at Übernehmen → frozen", () => {
+    expect(canUndoReview(penalty("p", "sz", "approved", { reviewed_at: "2027-06-12T09:59:59.999Z" }), r(acc))).toBe(false);
+    expect(canUndoReview(penalty("p", "sz", "approved", { reviewed_at: acc }), r(acc))).toBe(false);
+    expect(canUndoReview(penalty("p", "sz", "approved", { reviewed_at: "2027-06-12T10:00:00Z" }), r(acc))).toBe(false);
+    expect(canUndoReview(penalty("p", "sz", "approved"), r(acc))).toBe(false);
+  });
+
+  it("decided after Übernehmen → undoable", () => {
+    expect(canUndoReview(penalty("p", "sz", "rejected", { reviewed_at: "2027-06-12T10:00:00.001Z" }), r(acc))).toBe(true);
+    expect(
+      canUndoReview(
+        penalty("p", "sz", "approved", { reviewed_at: "2027-06-12T10:00:00.000000001Z" }),
+        r(acc),
+      ),
+    ).toBe(true);
+  });
+
+  it("compareInstants", () => {
+    expect(compareInstants("2027-06-12T10:00:00Z", "2027-06-12T12:00:00+02:00")).toBe(0);
+    expect(compareInstants("2027-06-12T10:00:00.1Z", "2027-06-12T10:00:00.09Z")).toBeGreaterThan(0);
+    expect(Number.isNaN(compareInstants("x", acc))).toBe(true);
+  });
+});
+
+describe("canUndoOnDesktop", () => {
+  const p = penalty("p1", "sz", "approved", { reviewed_at: "2027-06-12T10:01:00.000Z" });
+
+  it("web decision not undoable locally", () => {
+    expect(canUndoOnDesktop(p, { penalties_accepted_at: null }, new Set(["p1"]))).toBe(false);
+  });
+
+  it("local decision undoable, still subject to the Übernehmen freeze", () => {
+    expect(canUndoOnDesktop(p, { penalties_accepted_at: null }, new Set(["other"]))).toBe(true);
+    expect(canUndoOnDesktop(p, { penalties_accepted_at: "2027-06-12T10:05:00.000Z" }, new Set())).toBe(false);
   });
 });

@@ -145,6 +145,20 @@ describe('review', () => {
     expect(p.status).toBe('rejected');
   });
 
+  it('Rückgängig = undo', async () => {
+    respondWith({ ...penalty, status: 'pending', reviewed_at: null, reviewed_by: null });
+    const p = await apiClient.penalties.undo('e1', 'p1');
+    expect(lastCall()).toEqual({ url: '/api/events/e1/penalties/p1/undo', method: 'POST', body: undefined });
+    expect(p.status).toBe('pending');
+    expect(p.reviewed_at).toBeNull();
+  });
+
+  it('Übernehmen response carries penalties_accepted_at', async () => {
+    respondWith({ approved: 1, rejected: 0, dq: 0, penalties_accepted_at: ts });
+    const res = await apiClient.penalties.bulkApprove('e1', 'run1');
+    expect(res.penalties_accepted_at).toBe(ts);
+  });
+
   it('Übernehmen = bulk-approve', async () => {
     respondWith({ approved: 2, rejected: 0, dq: 1 });
     const res = await apiClient.penalties.bulkApprove('e1', 'run1');

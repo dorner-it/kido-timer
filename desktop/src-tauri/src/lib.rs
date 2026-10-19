@@ -68,6 +68,8 @@ pub fn run() {
             commands::onprem_rotate_token,
             commands::onprem_set_current_runs,
             commands::onprem_review_penalty,
+            commands::onprem_undo_review,
+            commands::onprem_web_decided_penalties,
             commands::onprem_take_over,
             commands::onprem_set_lineup,
             commands::onprem_set_hand_times,

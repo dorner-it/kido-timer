@@ -59,6 +59,7 @@ fn run(disc: &Discipline, team_id: Uuid, run_number: u32, lane: u8) -> Run {
         time_source: TimeSource::Lichtschranke,
         hand_time_1_ms: None,
         hand_time_2_ms: None,
+        penalties_accepted_at: None,
         created_at: ts(),
         updated_at: ts(),
     }
@@ -145,6 +146,7 @@ fn upload_run(r: &Run) -> UploadRun {
         time_source: TimeSource::Lichtschranke,
         hand_time_1_ms: None,
         hand_time_2_ms: None,
+        penalties_accepted_at: None,
     }
 }
 
@@ -988,4 +990,82 @@ fn import_twice_is_a_noop_the_second_time() {
     assert!(second.to_put.is_empty());
     assert!(second.corrections.is_empty());
     assert_eq!(second.imported, 1);
+}
+
+// ===== penalties_accepted_at ("Übernehmen", review undo) =====
+
+#[test]
+fn merge_accepted_at_later_wins_and_null_never_clears() {
+    assert_eq!(merge_accepted_at(None, None), None);
+    assert_eq!(merge_accepted_at(Some(ts()), None), Some(ts()));
+    assert_eq!(merge_accepted_at(None, Some(ts())), Some(ts()));
+    assert_eq!(merge_accepted_at(Some(ts()), Some(later())), Some(later()));
+    assert_eq!(merge_accepted_at(Some(later()), Some(ts())), Some(later()));
+}
+
+#[test]
+fn upload_carries_penalties_accepted_at() {
+    let f = fx();
+    let mut db = Db::new(&f, Vec::new());
+    let mut up = upload_run(&f.runs[0]);
+    up.penalties_accepted_at = Some(ts());
+    let input = OnpremUploadInput {
+        runs: vec![up],
+        ..Default::default()
+    };
+    db.upload(&f, &input, later()).unwrap();
+    assert_eq!(db.run(f.runs[0].id).penalties_accepted_at, Some(ts()));
+
+    // An older desktop (field missing) keeps the stored value.
+    let body = serde_json::json!({
+        "runs": [{
+            "id": f.runs[0].id, "run_number": 1, "status": "completed",
+            "original_time_ms": 47230, "started_at": null, "ended_at": null,
+            "lineup": [], "time_source": "lichtschranke"
+        }]
+    });
+    let input: OnpremUploadInput = serde_json::from_value(body).unwrap();
+    assert_eq!(input.runs[0].penalties_accepted_at, None);
+    db.upload(&f, &input, even_later()).unwrap();
+    assert_eq!(db.run(f.runs[0].id).penalties_accepted_at, Some(ts()));
+}
+
+#[test]
+fn upload_body_with_penalties_accepted_at_parses() {
+    let id = Uuid::new_v4();
+    let body = serde_json::json!({
+        "runs": [{
+            "id": id, "run_number": 1, "status": "completed",
+            "penalties_accepted_at": "2027-06-12T10:00:00Z"
+        }]
+    });
+    let input: OnpremUploadInput = serde_json::from_value(body).unwrap();
+    assert_eq!(input.runs[0].penalties_accepted_at, Some(ts()));
+}
+
+#[test]
+fn desktop_undo_does_not_revert_a_web_decision() {
+    // The web has approved; the desktop undid it locally (pending). The
+    // upload keeps the web's decision — undo in the desktop only works
+    // for decisions the web doesn't have yet.
+    let f = fx();
+    let pending = pen(&f, &f.runs[0], Some(SZ_CODE), PenaltyStatus::Pending);
+    let web = reviewed(pending.clone(), PenaltyStatus::Approved, ts(), "web");
+    let mut db = Db::new(&f, vec![web.clone()]);
+    let input = OnpremUploadInput {
+        penalties: vec![pending.clone()],
+        ..Default::default()
+    };
+    db.upload(&f, &input, later()).unwrap();
+    assert_eq!(db.pen(pending.id).status, PenaltyStatus::Approved);
+    assert_eq!(db.pen(pending.id).reviewed_by.as_deref(), Some("web"));
+
+    // A desktop-only decision that was undone arrives as pending → pending.
+    let local = pen(&f, &f.runs[0], Some(SZ_CODE), PenaltyStatus::Pending);
+    let input = OnpremUploadInput {
+        penalties: vec![local.clone()],
+        ..Default::default()
+    };
+    db.upload(&f, &input, later()).unwrap();
+    assert_eq!(db.pen(local.id).status, PenaltyStatus::Pending);
 }

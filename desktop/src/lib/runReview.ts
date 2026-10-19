@@ -149,6 +149,56 @@ export function canReview(p: Pick<Penalty, "status">): boolean {
   return p.status === "pending";
 }
 
+/**
+ * Compare two RFC 3339 instants with full sub-millisecond precision (the
+ * web writes nanoseconds; `Date.parse` alone truncates to ms).
+ * Returns <0, 0, >0; `NaN` when either cannot be parsed.
+ */
+export function compareInstants(a: string, b: string): number {
+  const split = (s: string): [number, string] => {
+    const m = /\.(\d+)/.exec(s);
+    const frac = (m?.[1] ?? "").padEnd(9, "0").slice(0, 9);
+    const secMs = Date.parse(m ? s.replace(m[0], "") : s);
+    return [secMs, frac];
+  };
+  const [sa, fa] = split(a);
+  const [sb, fb] = split(b);
+  if (Number.isNaN(sa) || Number.isNaN(sb)) return Number.NaN;
+  if (sa !== sb) return sa - sb;
+  return fa < fb ? -1 : fa > fb ? 1 : 0;
+}
+
+/**
+ * „Rückgängig“ allowed? Mirrors `kido_core::penalty::can_undo_review`
+ * (and `local::organizer::can_undo_review`): decided and not frozen by
+ * the run's „Übernehmen“ — `penalties_accepted_at` missing or the
+ * decision strictly after it.
+ */
+export function canUndoReview(
+  p: Pick<Penalty, "status" | "reviewed_at">,
+  run: Pick<Run, "penalties_accepted_at"> | null | undefined,
+): boolean {
+  if (p.status === "pending") return false;
+  const accepted = run?.penalties_accepted_at ?? null;
+  if (accepted == null) return true;
+  if (p.reviewed_at == null) return false;
+  return compareInstants(p.reviewed_at, accepted) > 0;
+}
+
+/**
+ * Desktop (on-prem) variant: additionally, decisions that come from the
+ * web snapshot (`webDecided`, base already approved / rejected) are not
+ * undoable — the upload keeps the web's decision anyway. Mirrors the
+ * check in `local::organizer::undo_review`.
+ */
+export function canUndoOnDesktop(
+  p: Pick<Penalty, "id" | "status" | "reviewed_at">,
+  run: Pick<Run, "penalties_accepted_at"> | null | undefined,
+  webDecided: ReadonlySet<string>,
+): boolean {
+  return !webDecided.has(p.id) && canUndoReview(p, run);
+}
+
 /** Confirming an FV needs an explicit confirmation dialog. */
 export function needsFvConfirmation(p: Pick<Penalty, "kind">): boolean {
   return p.kind === "fv";

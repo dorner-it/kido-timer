@@ -20,6 +20,7 @@ import {
 import {
   REVIEW_STATUS_LABELS,
   canReview,
+  canUndoReview,
   groupByStation,
   needsFvConfirmation,
   penaltyLine,
@@ -57,6 +58,20 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+export type ReviewAction = 'approve' | 'reject' | 'undo';
+
+/** Calls the review endpoint for one penalty ("Bestätigen" / "Zurücknehmen" / "Rückgängig"). */
+export function runReviewAction(eventId: string, penaltyId: string, action: ReviewAction): Promise<Penalty> {
+  switch (action) {
+    case 'approve':
+      return apiClient.penalties.approve(eventId, penaltyId);
+    case 'reject':
+      return apiClient.penalties.reject(eventId, penaltyId);
+    case 'undo':
+      return apiClient.penalties.undo(eventId, penaltyId);
+  }
+}
+
 export default function RunReviewCard({
   eventId,
   disciplineId,
@@ -84,13 +99,10 @@ export default function RunReviewCard({
   const groups = useMemo(() => groupByStation(penalties, catalogue), [penalties, catalogue]);
   const title = `Lauf ${run.run_number} · ${team?.name ?? 'Unbekannte Mannschaft'}`;
 
-  const review = async (p: Penalty, action: 'approve' | 'reject') => {
+  const review = async (p: Penalty, action: ReviewAction) => {
     setBusyId(p.id);
     try {
-      const updated =
-        action === 'approve'
-          ? await apiClient.penalties.approve(eventId, p.id)
-          : await apiClient.penalties.reject(eventId, p.id);
+      const updated = await runReviewAction(eventId, p.id, action);
       onPenaltyUpdated(updated);
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Prüfung fehlgeschlagen');
@@ -190,8 +202,10 @@ export default function RunReviewCard({
                     penalty={p}
                     catalogue={catalogue}
                     busy={busyId === p.id}
+                    undoable={canUndoReview(p, run)}
                     onConfirm={() => confirmClick(p)}
                     onWithdraw={() => void review(p, 'reject')}
+                    onUndo={() => void review(p, 'undo')}
                   />
                 ))}
               </ul>
@@ -241,8 +255,11 @@ export default function RunReviewCard({
           catalogue={catalogue}
           onCancel={() => setTakeOverOpen(false)}
           onConfirm={async () => {
-            await apiClient.penalties.bulkApprove(eventId, run.id);
-            setTakenOverAt(formatClock(new Date().toISOString()));
+            const res = await apiClient.penalties.bulkApprove(eventId, run.id);
+            const acceptedAt = res.penalties_accepted_at ?? new Date().toISOString();
+            // Freeze decisions made so far (undo rule) until the next refresh.
+            onRunUpdated({ ...run, penalties_accepted_at: acceptedAt });
+            setTakenOverAt(formatClock(acceptedAt));
             await onTakenOver(run.id);
           }}
           onError={onError}
@@ -289,18 +306,23 @@ export function LineupMissingBadge() {
   );
 }
 
-function PenaltyRow({
+export function PenaltyRow({
   penalty: p,
   catalogue,
   busy,
+  undoable = false,
   onConfirm,
   onWithdraw,
+  onUndo,
 }: {
   penalty: Penalty;
   catalogue: CatalogueIndex;
   busy: boolean;
+  /** Decided and not frozen by "Übernehmen" → show "Rückgängig". */
+  undoable?: boolean;
   onConfirm: () => void;
   onWithdraw: () => void;
+  onUndo?: () => void;
 }) {
   const kind = penaltyKind(p);
   const rejected = p.status === 'rejected';
@@ -355,14 +377,27 @@ function PenaltyRow({
           </button>
         </span>
       ) : (
-        <span
-          className={[
-            'pill',
-            p.status === 'approved' ? 'bg-status-confirmed/15 text-status-confirmed' : 'bg-ink-50/5 text-ink-300',
-          ].join(' ')}
-          title={p.reviewed_at ? `geprüft ${formatClock(p.reviewed_at) ?? ''}` : undefined}
-        >
-          {REVIEW_STATUS_LABELS[p.status]}
+        <span className="inline-flex items-center gap-1">
+          <span
+            className={[
+              'pill',
+              p.status === 'approved' ? 'bg-status-confirmed/15 text-status-confirmed' : 'bg-ink-50/5 text-ink-300',
+            ].join(' ')}
+            title={p.reviewed_at ? `geprüft ${formatClock(p.reviewed_at) ?? ''}` : undefined}
+          >
+            {REVIEW_STATUS_LABELS[p.status]}
+          </span>
+          {undoable && onUndo && (
+            <button
+              type="button"
+              className="btn px-2 py-1 text-[10px]"
+              disabled={busy}
+              onClick={onUndo}
+              title="Entscheidung zurücksetzen – der Fehler ist wieder offen"
+            >
+              Rückgängig
+            </button>
+          )}
         </span>
       )}
     </li>

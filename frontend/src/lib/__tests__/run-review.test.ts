@@ -7,6 +7,8 @@ import { indexCatalogue } from '../penalties';
 import {
   REVIEW_STATUS_LABELS,
   canReview,
+  canUndoReview,
+  compareInstants,
   countsTowardsResult,
   groupByStation,
   markRunApproved,
@@ -285,5 +287,55 @@ describe('list updates', () => {
     const out = markRunApproved([a, b, c], 'r1');
     expect(out.map((p) => p.status)).toEqual(['approved', 'rejected', 'pending']);
     expect(a.status).toBe('pending');
+  });
+});
+
+describe('canUndoReview (mirror of kido_core::penalty::can_undo_review)', () => {
+  const acc = '2027-06-12T10:00:00Z';
+  const run = (penalties_accepted_at: string | null) => ({ penalties_accepted_at });
+
+  it('pending → never', () => {
+    expect(canUndoReview(pen('sz', 'pending'), run(null))).toBe(false);
+    expect(canUndoReview(pen('sz', 'pending', { reviewed_at: '2027-06-12T11:00:00Z' }), run(acc))).toBe(false);
+  });
+
+  it('no Übernehmen yet → every decision', () => {
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: acc }), run(null))).toBe(true);
+    expect(canUndoReview(pen('fv', 'rejected', { reviewed_at: acc }), run(null))).toBe(true);
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: null }), run(null))).toBe(true);
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: acc }), undefined)).toBe(true);
+    // Older backend: field missing on the run.
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: acc }), {} as never)).toBe(true);
+  });
+
+  it('decided before Übernehmen → frozen', () => {
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: '2027-06-12T09:59:59Z' }), run(acc))).toBe(false);
+    expect(canUndoReview(pen('sz', 'rejected', { reviewed_at: '2027-06-12T09:00:00Z' }), run(acc))).toBe(false);
+  });
+
+  it('decided at the Übernehmen instant (bulk-approved) → frozen', () => {
+    const at = '2027-06-12T10:00:00.123456789Z';
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: at }), run(at))).toBe(false);
+  });
+
+  it('decided after Übernehmen → undoable, with sub-ms precision', () => {
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: '2027-06-12T10:00:01Z' }), run(acc))).toBe(true);
+    expect(
+      canUndoReview(
+        pen('fv', 'rejected', { reviewed_at: '2027-06-12T10:00:00.123456790Z' }),
+        run('2027-06-12T10:00:00.123456789Z'),
+      ),
+    ).toBe(true);
+  });
+
+  it('decided without reviewed_at on a taken-over run → frozen', () => {
+    expect(canUndoReview(pen('sz', 'approved', { reviewed_at: null }), run(acc))).toBe(false);
+  });
+
+  it('compareInstants handles offsets and fractions', () => {
+    expect(compareInstants('2027-06-12T10:00:00Z', '2027-06-12T12:00:00+02:00')).toBe(0);
+    expect(compareInstants('2027-06-12T10:00:00.5Z', '2027-06-12T10:00:00.4999Z')).toBeGreaterThan(0);
+    expect(compareInstants('2027-06-12T10:00:00Z', '2027-06-12T10:00:00.000000001Z')).toBeLessThan(0);
+    expect(Number.isNaN(compareInstants('kaputt', '2027-06-12T10:00:00Z'))).toBe(true);
   });
 });
