@@ -94,7 +94,13 @@ pub async fn remove(
         .into_iter()
         .find(|t| t.id == team_id)
         .ok_or_else(|| AppError::NotFound(format!("team {team_id}")))?;
-    teams::delete(&state.db, &existing).await?;
+    // Cascade: the team's runners (new and legacy runner keys) and its
+    // Meldungen go with it; runs and penalties stay (competition record).
+    // See `teams::plan_delete_cascade`.
+    let runners = crate::db::runners::list_stored_for_team(&state.db, event_id, team_id).await?;
+    let entries = crate::db::team_entries::list_for_event(&state.db, event_id).await?;
+    let ops = teams::plan_delete_cascade(&existing, &runners, &entries);
+    teams::delete_cascade(&state.db, event_id, &ops).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
