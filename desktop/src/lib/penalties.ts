@@ -13,13 +13,21 @@ export function countsTowardsResult(status: PenaltyStatus): boolean {
   return status === "pending" || status === "approved";
 }
 
+/**
+ * All penalties of a snapshot: `penalties` (A1, all statuses) when
+ * present, else the legacy `approved_penalties`.
+ */
+export function allPenalties(snapshot: DisciplinePayload | null): Penalty[] {
+  if (!snapshot) return [];
+  return Array.isArray(snapshot.penalties) ? snapshot.penalties : snapshot.approved_penalties;
+}
+
 /** Penalties of one run, oldest first. */
 export function penaltiesForRun(
   snapshot: DisciplinePayload | null,
   runId: string,
 ): Penalty[] {
-  if (!snapshot) return [];
-  return snapshot.approved_penalties
+  return allPenalties(snapshot)
     .filter((p) => p.run_id === runId)
     .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
 }

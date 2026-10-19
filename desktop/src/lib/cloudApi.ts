@@ -8,13 +8,16 @@ import type {
   CloudIdentity,
   DisciplineListItem,
   DisciplinePayload,
+  DivergenceState,
   EventSummary,
   FailedPost,
+  OnPremStatus,
   OpenKidoResult,
+  Penalty,
   RecordOutcome,
-  RunDivergence,
   RunStatus,
   SyncMode,
+  UploadOutcome,
 } from "./cloudTypes";
 import type { ResultsResponse } from "./results";
 
@@ -71,12 +74,17 @@ export async function cloudSetSyncMode(mode: SyncMode): Promise<void> {
   await invoke("cloud_set_sync_mode", { mode });
 }
 
-export async function cloudDivergences(): Promise<RunDivergence[]> {
-  if (!IS_TAURI) return [];
-  return invoke<RunDivergence[]>("cloud_divergences");
+export const EMPTY_DIVERGENCE: DivergenceState = {
+  divergences: [],
+  unsynced: { penalties: 0, lineups: 0, handTimes: 0 },
+};
+
+export async function cloudDivergences(): Promise<DivergenceState> {
+  if (!IS_TAURI) return EMPTY_DIVERGENCE;
+  return invoke<DivergenceState>("cloud_divergences");
 }
 
-/** `upload = true`: lokale Ergebnisse hochladen, sonst verwerfen. */
+/** `upload = true`: alle lokalen Änderungen hochladen (A3), sonst verwerfen. */
 export async function cloudResolveDivergence(upload: boolean): Promise<void> {
   if (!IS_TAURI) return;
   await invoke("cloud_resolve_divergence", { upload });
@@ -190,4 +198,82 @@ export async function listenCloudEvents(
 ): Promise<UnlistenFn> {
   if (!IS_TAURI) return () => {};
   return listen<CloudEvent>(CLOUD_EVENT, (e) => handler(e.payload));
+}
+
+// ─── On-prem (lokaler Strafrichter-Server + Organisator) ─────────────────────
+
+export const OFFLINE_STATUS: OnPremStatus = {
+  running: false,
+  port: null,
+  links: [],
+  token: null,
+  ownerSub: null,
+  uptimeSecs: null,
+  clients: [],
+  error: null,
+  judgeUiBuilt: false,
+  uploadRuns: 0,
+  uploadPenalties: 0,
+  lastUploadAt: null,
+};
+
+export async function onPremStatus(): Promise<OnPremStatus> {
+  if (!IS_TAURI) return OFFLINE_STATUS;
+  return invoke<OnPremStatus>("onprem_status");
+}
+
+/** „Neuer Zugangscode“ — alte Handys bekommen 401. */
+export async function onPremRotateToken(): Promise<OnPremStatus> {
+  if (!IS_TAURI) return requireDesktop("Zugangscode");
+  return invoke<OnPremStatus>("onprem_rotate_token");
+}
+
+export async function onPremSetCurrentRuns(runIds: string[]): Promise<void> {
+  if (!IS_TAURI) return requireDesktop("Aktuelle Läufe");
+  await invoke("onprem_set_current_runs", { runIds });
+}
+
+export async function onPremReviewPenalty(penaltyId: string, approve: boolean): Promise<Penalty> {
+  if (!IS_TAURI) return requireDesktop("Prüfung");
+  return invoke<Penalty>("onprem_review_penalty", { penaltyId, approve });
+}
+
+/** „Übernehmen“: offene Fehler des Laufs → bestätigt. */
+export async function onPremTakeOver(runId: string): Promise<number> {
+  if (!IS_TAURI) return requireDesktop("Übernehmen");
+  return invoke<number>("onprem_take_over", { runId });
+}
+
+export async function onPremSetLineup(runId: string, runnerIds: string[]): Promise<void> {
+  if (!IS_TAURI) return requireDesktop("Besetzung");
+  await invoke("onprem_set_lineup", { runId, runnerIds });
+}
+
+export async function onPremSetHandTimes(
+  runId: string,
+  handTime1Ms: number,
+  handTime2Ms: number,
+): Promise<number> {
+  if (!IS_TAURI) return requireDesktop("Handzeit");
+  return invoke<number>("onprem_set_hand_times", { runId, handTime1Ms, handTime2Ms });
+}
+
+export async function onPremClearHandTimes(runId: string): Promise<void> {
+  if (!IS_TAURI) return requireDesktop("Handzeit");
+  await invoke("onprem_clear_hand_times", { runId });
+}
+
+/** Mittelwert der Handzeiten (kido-core, 1/100 s, halb aufgerundet). */
+export async function handTimeMean(handTime1Ms: number, handTime2Ms: number): Promise<number> {
+  if (!IS_TAURI) {
+    // Browser preview only: same formula as kido_core::timing.
+    return Math.floor((handTime1Ms + handTime2Ms + 10) / 20) * 10;
+  }
+  return invoke<number>("hand_time_mean", { handTime1Ms, handTime2Ms });
+}
+
+/** „Ins Web hochladen“ (A3). */
+export async function cloudUploadOnPrem(): Promise<UploadOutcome> {
+  if (!IS_TAURI) return requireDesktop("Upload");
+  return invoke<UploadOutcome>("cloud_upload_onprem");
 }

@@ -3,6 +3,7 @@ import { modeLabelDE, t, wgDescriptionDE, wgLabelDE } from "../lib/i18n";
 import type {
   CatalogueItem,
   DisciplinePayload,
+  OnPremStatus,
   Run,
   SyncMode,
 } from "../lib/cloudTypes";
@@ -18,6 +19,9 @@ interface Props {
   catalogue: Map<string, CatalogueItem>;
   onSyncModeChange: (mode: SyncMode | null) => void;
   onClose: () => void;
+  /** On-prem: open the judge / review screen. */
+  onOpenOnPrem?: () => void;
+  onPremStatus?: OnPremStatus;
 }
 
 export function CompetitionBanner({
@@ -26,6 +30,8 @@ export function CompetitionBanner({
   catalogue,
   onSyncModeChange,
   onClose,
+  onOpenOnPrem,
+  onPremStatus,
 }: Props) {
   const currentRuns = useMemo(() => currentRunsOrdered(snapshot), [snapshot]);
   if (!snapshot || !effectiveMode) return null;
@@ -52,6 +58,16 @@ export function CompetitionBanner({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {!live && onOpenOnPrem && (
+            <button type="button" className="btn btn-primary" onClick={onOpenOnPrem}>
+              {t.onprem.open}
+              {onPremStatus?.running && (
+                <span className="ml-2 font-mono text-[10px] opacity-80">
+                  {t.onprem.phonesShort(onPremStatus.clients.length)}
+                </span>
+              )}
+            </button>
+          )}
           <SyncModeToggle
             webDefault={discipline.sync_mode}
             effective={effectiveMode}

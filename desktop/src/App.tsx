@@ -14,6 +14,10 @@ import { KidoConflictDialog } from "./components/KidoConflictDialog";
 import { ConfirmRunModal, type ConfirmRunStep } from "./components/ConfirmRunModal";
 import { DivergenceDialog } from "./components/DivergenceDialog";
 import { ResultsView } from "./components/ResultsView";
+import { OnPremView } from "./components/OnPremView";
+import type { ReviewActions } from "./components/RunReviewCard";
+import { EMPTY_DIVERGENCE } from "./lib/cloudApi";
+import { planSyncSwitch } from "./lib/syncMode";
 import { useConnection } from "./lib/useConnection";
 import { useUpdater } from "./lib/useUpdater";
 import { useCloud } from "./lib/useCloud";
@@ -24,7 +28,7 @@ import type { KidoConflict, SyncMode } from "./lib/cloudTypes";
 import { HARDWARE_CHANNELS, laneCountFor, resolveLane } from "./lib/lanes";
 import { catalogueIndex } from "./lib/penalties";
 
-type View = "lanes" | "protocol" | "results";
+type View = "lanes" | "protocol" | "results" | "onprem";
 
 /** Hardware channels — lane N = channel N (Gruppenstafette: 1 channel per lane). */
 const NUM_LANES = HARDWARE_CHANNELS;
@@ -313,17 +317,56 @@ export default function App() {
     [laneCount, cloudSnapshot, cloud.state.laneOverrides],
   );
 
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const handleSyncModeChange = useCallback(
     (mode: SyncMode | null) => {
       if (!cloudSnapshot) return;
+      const unsynced = cloud.state.onPrem.uploadRuns > 0 || cloud.state.onPrem.uploadPenalties > 0;
+      const plan = planSyncSwitch({
+        webDefault: cloudSnapshot.discipline.sync_mode,
+        target: mode,
+        paired: !!cloud.state.identity,
+        hasUnsynced: unsynced,
+      });
+      setSyncNotice(plan.notes.length > 0 ? plan.notes.join(" ") : null);
       cloud.setSyncOverride(
         cloudSnapshot.discipline.id,
         cloudSnapshot.discipline.sync_mode,
-        mode,
+        plan.override,
       );
     },
     [cloud, cloudSnapshot],
   );
+
+  useEffect(() => {
+    if (!syncNotice) return;
+    const id = window.setTimeout(() => setSyncNotice(null), 9000);
+    return () => window.clearTimeout(id);
+  }, [syncNotice]);
+
+  // The on-prem screen only makes sense on-prem with a discipline.
+  useEffect(() => {
+    if (view === "onprem" && (!cloudSnapshot || cloud.effectiveMode !== "offline")) {
+      setView("lanes");
+    }
+  }, [view, cloudSnapshot, cloud.effectiveMode]);
+
+  const reviewActions: ReviewActions = useMemo(
+    () => ({
+      reviewPenalty: cloud.reviewPenalty,
+      takeOver: cloud.takeOver,
+      setLineup: cloud.setLineup,
+      setHandTimes: cloud.setHandTimes,
+      clearHandTimes: cloud.clearHandTimes,
+    }),
+    [cloud.reviewPenalty, cloud.takeOver, cloud.setLineup, cloud.setHandTimes, cloud.clearHandTimes],
+  );
+
+  const handleGoLiveAfterUpload = useCallback(async () => {
+    if (!cloudSnapshot) return;
+    // Rust switches the web to live (A2) when the effective mode turns live.
+    cloud.setSyncOverride(cloudSnapshot.discipline.id, cloudSnapshot.discipline.sync_mode, "live");
+  }, [cloud, cloudSnapshot]);
 
   const handleSetupConfirm = useCallback(
     (next: AppSettings, mode: "serial" | "demo" | "cloud") => {
@@ -431,7 +474,14 @@ export default function App() {
               catalogue={catalogue}
               onSyncModeChange={handleSyncModeChange}
               onClose={() => void cloud.deselect()}
+              onOpenOnPrem={() => setView("onprem")}
+              onPremStatus={cloud.state.onPrem}
             />
+            {syncNotice && (
+              <p className="mx-7 mt-2 rounded-xl border border-ink-50/[0.06] bg-ink-50/[0.03] px-4 py-2 font-mono text-[11px] text-ink-100">
+                {syncNotice}
+              </p>
+            )}
             {cloud.state.snapshot && (
               <LaneAssignmentPanel
                 snapshot={cloud.state.snapshot}
@@ -451,6 +501,20 @@ export default function App() {
             onSelectLane={setSelectedLane}
             onAdjust={adjustChannel}
             onClear={clearChannel}
+          />
+        ) : view === "onprem" && cloud.state.snapshot ? (
+          <OnPremView
+            snapshot={cloud.state.snapshot}
+            status={cloud.state.onPrem}
+            paired={!!cloud.state.identity}
+            catalogue={catalogue}
+            actions={reviewActions}
+            onBack={() => setView("lanes")}
+            onRefreshStatus={cloud.refreshOnPrem}
+            onRotateToken={cloud.rotateOnPremToken}
+            onSetCurrentRuns={cloud.setCurrentRuns}
+            onUpload={cloud.uploadOnPrem}
+            onGoLive={handleGoLiveAfterUpload}
           />
         ) : view === "results" ? (
           <ResultsView
@@ -551,7 +615,7 @@ export default function App() {
       />
 
       <DivergenceDialog
-        divergences={cloud.effectiveMode === "live" ? cloud.state.divergences : []}
+        divergence={cloud.effectiveMode === "live" ? cloud.state.divergence : EMPTY_DIVERGENCE}
         snapshot={cloud.state.snapshot}
         onUpload={() => cloud.resolveDivergence(true)}
         onDiscard={() => cloud.resolveDivergence(false)}

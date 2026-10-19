@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  allPenalties,
   catalogueIndex,
   countsTowardsResult,
   formatRunSummary,
@@ -9,7 +10,7 @@ import {
   penaltyStatusLabel,
   summarizeRun,
 } from "../penalties";
-import type { CatalogueItem } from "../cloudTypes";
+import type { CatalogueItem, DisciplinePayload } from "../cloudTypes";
 import { penalty, RUN_A1, RUN_B1, samplePayload } from "./fixtures";
 
 describe("summarizeRun", () => {
@@ -58,9 +59,25 @@ describe("summarizeRun", () => {
 });
 
 describe("penaltiesForRun", () => {
+  it("prefers `penalties` (all statuses) over approved_penalties", () => {
+    const s = samplePayload();
+    s.approved_penalties = [penalty("p1", "sz", "approved")];
+    s.penalties = [penalty("p1", "sz", "approved"), penalty("p2", "sz", "pending")];
+    expect(allPenalties(s).map((p) => p.id)).toEqual(["p1", "p2"]);
+    expect(penaltiesForRun(s, RUN_A1)).toHaveLength(2);
+  });
+
+  it("falls back to approved_penalties when penalties is missing", () => {
+    const s = samplePayload() as Partial<DisciplinePayload> & DisciplinePayload;
+    s.approved_penalties = [penalty("p1", "sz", "approved")];
+    delete (s as Partial<DisciplinePayload>).penalties;
+    expect(allPenalties(s).map((p) => p.id)).toEqual(["p1"]);
+    expect(allPenalties(null)).toEqual([]);
+  });
+
   it("filters by run and sorts oldest first", () => {
     const s = samplePayload();
-    s.approved_penalties = [
+    s.penalties = [
       penalty("p2", "sz", "approved", { created_at: "2027-06-12T10:00:05Z" }),
       penalty("p1", "sz", "approved", { created_at: "2027-06-12T10:00:01Z" }),
       penalty("p3", "fv", "approved", { run_id: RUN_B1 }),

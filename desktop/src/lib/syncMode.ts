@@ -83,3 +83,54 @@ export function saveSyncOverrides(overrides: SyncOverrides): void {
     // ignore quota / disabled storage
   }
 }
+
+export interface SyncSwitchPlan {
+  /** Override to store (`null` = follow the web default). */
+  override: SyncMode | null;
+  /** Rust will switch the web to live first (A2). */
+  switchesWebToLive: boolean;
+  /** The on-prem judge server will start. */
+  startsLocalServer: boolean;
+  /** Hints shown before / while switching. */
+  notes: string[];
+}
+
+/**
+ * What happens when the operator picks `target` (`null` = back to the web
+ * default) in the Live / On-prem switch.
+ */
+export function planSyncSwitch(input: {
+  webDefault: SyncMode;
+  target: SyncMode | null;
+  paired: boolean;
+  /** Local changes not on the web yet (timing / errors / lineups …). */
+  hasUnsynced: boolean;
+}): SyncSwitchPlan {
+  const effective = input.target ?? input.webDefault;
+  const override =
+    input.target == null || input.target === input.webDefault ? null : input.target;
+  const notes: string[] = [];
+  if (effective === "live") {
+    if (!input.paired) {
+      notes.push("Nicht gekoppelt — Live braucht die Verbindung zum Web-Konto.");
+    }
+    if (input.hasUnsynced) {
+      notes.push(
+        "Lokale Änderungen sind noch nicht im Web — beim Wechsel wird gefragt: hochladen oder verwerfen.",
+      );
+    }
+    if (input.webDefault === "offline" && input.paired) {
+      notes.push("Das Web wird für diese Disziplin auf Live umgestellt.");
+    }
+  } else {
+    notes.push(
+      "Der Laptop startet einen lokalen Server für die Strafrichter-Handys (QR-Code im On-prem-Bildschirm).",
+    );
+  }
+  return {
+    override,
+    switchesWebToLive: effective === "live" && input.webDefault === "offline" && input.paired,
+    startsLocalServer: effective === "offline",
+    notes,
+  };
+}

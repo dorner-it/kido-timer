@@ -3,6 +3,7 @@ import {
   effectiveSyncMode,
   isOverridden,
   loadSyncOverrides,
+  planSyncSwitch,
   sanitizeOverrides,
   snapshotSyncMode,
   syncModeLabel,
@@ -70,5 +71,39 @@ describe("persistence helpers", () => {
   it("labels", () => {
     expect(syncModeLabel("live")).toBe("Live");
     expect(syncModeLabel("offline")).toBe("On-prem");
+  });
+});
+
+describe("planSyncSwitch", () => {
+  it("override to live on an offline web default switches the web (A2)", () => {
+    const plan = planSyncSwitch({ webDefault: "offline", target: "live", paired: true, hasUnsynced: false });
+    expect(plan.override).toBe("live");
+    expect(plan.switchesWebToLive).toBe(true);
+    expect(plan.startsLocalServer).toBe(false);
+    expect(plan.notes.join(" ")).toContain("auf Live umgestellt");
+  });
+
+  it("live without pairing cannot switch the web", () => {
+    const plan = planSyncSwitch({ webDefault: "offline", target: "live", paired: false, hasUnsynced: false });
+    expect(plan.switchesWebToLive).toBe(false);
+    expect(plan.notes.join(" ")).toContain("Nicht gekoppelt");
+  });
+
+  it("live with unsynced local changes warns about the decision", () => {
+    const plan = planSyncSwitch({ webDefault: "live", target: "live", paired: true, hasUnsynced: true });
+    expect(plan.override).toBeNull();
+    expect(plan.switchesWebToLive).toBe(false);
+    expect(plan.notes.join(" ")).toContain("hochladen oder verwerfen");
+  });
+
+  it("on-prem starts the local server; choosing the default clears the override", () => {
+    const plan = planSyncSwitch({ webDefault: "live", target: "offline", paired: true, hasUnsynced: false });
+    expect(plan.override).toBe("offline");
+    expect(plan.startsLocalServer).toBe(true);
+    expect(plan.switchesWebToLive).toBe(false);
+    expect(plan.notes[0]).toContain("lokalen Server");
+    const reset = planSyncSwitch({ webDefault: "offline", target: null, paired: true, hasUnsynced: false });
+    expect(reset.override).toBeNull();
+    expect(reset.startsLocalServer).toBe(true);
   });
 });

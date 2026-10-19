@@ -23,7 +23,7 @@ export const t = {
     resetConfirmAction: "Bestätigen",
     resetCancel: "Abbrechen",
     confirmRun: "Lauf übernehmen",
-    confirmRunHint: "Bestätigte Bahnen an die Cloud melden",
+    confirmRunHint: "Bestätigte Bahnen übernehmen (lokal gesichert, live auch ans Web)",
     confirmRunNone: "Keine Bahn wartet auf Übernahme",
     confirmRunCount: (n: number) =>
       n === 1 ? "1 Bahn bereit" : `${n} Bahnen bereit`,
@@ -175,7 +175,7 @@ export const t = {
     onPrem: "On-prem",
     liveHint: "Zeiten werden live an ki-do.it übertragen.",
     onPremHint:
-      "Desktop ist Master: Zeiten bleiben lokal (gesichert) und werden per KiDo-Datei oder später per Upload übertragen.",
+      "Desktop ist Master: Strafrichter-Handys verbinden sich mit diesem Laptop; Zeiten, Fehler und Besetzungen bleiben lokal (gesichert) und werden später hochgeladen oder per KiDo-Datei übertragen.",
     webDefault: "Standard aus dem Web",
     resetToDefault: "Auf Web-Standard zurücksetzen",
   },
@@ -186,8 +186,6 @@ export const t = {
     sz: "SZ",
     fv: "FV",
     provisionalNote: "vorläufig — offene Fehler zählen bis zur Entscheidung",
-    snapshotNote:
-      "Der Snapshot enthält nur bestätigte Fehler; offene/zurückgenommene erscheinen nach der Übernahme.",
   },
 
   divergence: {
@@ -197,13 +195,135 @@ export const t = {
     local: "Lokal",
     web: "Web",
     missing: "fehlt im Web",
-    upload: "Lokale Ergebnisse hochladen",
+    upload: "Lokale Änderungen hochladen",
     discard: "Lokale Änderungen verwerfen",
     discardConfirm:
-      "Wirklich verwerfen? Die lokal erfassten Zeiten gehen verloren (Tipp: vorher KiDo-Datei exportieren).",
+      "Wirklich verwerfen? Die lokal erfassten Zeiten, Fehler, Besetzungen und Handzeiten gehen verloren (Tipp: vorher KiDo-Datei exportieren).",
     discardConfirmAction: "Ja, verwerfen",
     busy: "Bitte warten …",
-    todo: "Hinweis: Fehler und Besetzungen werden in dieser Version nicht hochgeladen — nur Laufzeiten.",
+    extras: (penalties: number, lineups: number, handTimes: number) => {
+      const parts: string[] = [];
+      if (penalties > 0) parts.push(penalties === 1 ? "1 Fehler" : `${penalties} Fehler`);
+      if (lineups > 0) parts.push(lineups === 1 ? "1 Besetzung" : `${lineups} Besetzungen`);
+      if (handTimes > 0) parts.push(handTimes === 1 ? "1 Handzeit" : `${handTimes} Handzeiten`);
+      return parts.length > 0
+        ? `Außerdem lokal erfasst: ${parts.join(", ")} — werden mit hochgeladen.`
+        : "";
+    },
+    uploadNote: "Alles wird in einem Schritt hochgeladen (Laufzeiten, Fehler inkl. Status, Besetzungen, Handzeiten).",
+  },
+
+  onprem: {
+    open: "Strafrichter & Prüfung",
+    title: "On-prem: Strafrichter & Prüfung",
+    kicker: "Lokaler Betrieb",
+    back: "Zurück",
+    server: "Strafrichter-Zugang",
+    serverRunning: (port: number) => `Lokaler Server läuft (Port ${port})`,
+    serverStopped: "Lokaler Server ist aus",
+    serverStoppedHint: "Der Server läuft nur im On-prem-Betrieb mit geladenem Wettkampf.",
+    scanHint: "Handys im selben WLAN: QR-Code scannen oder Adresse im Browser öffnen.",
+    noAddress: "Keine Netzwerkadresse gefunden — ist der Laptop mit dem WLAN/LAN verbunden?",
+    otherAddresses: "Weitere Adressen",
+    rotate: "Neuer Zugangscode",
+    rotateConfirm:
+      "Neuen Zugangscode erzeugen? Alle verbundenen Handys müssen danach den neuen QR-Code scannen.",
+    rotateConfirmAction: "Ja, neuer Code",
+    phones: "Verbundene Handys",
+    phonesShort: (n: number) => (n === 1 ? "1 Handy" : `${n} Handys`),
+    noPhones: "Noch kein Handy verbunden.",
+    noPhoneHint:
+      "Seit über einer Minute hat sich kein Handy verbunden. Prüfen: gleiches WLAN? Windows-Firewall erlaubt KiDo-Timer (Ports 8787–8797)? Gäste-WLANs blockieren oft Verbindungen zwischen Geräten.",
+    judgeUiMissing:
+      "Diese Version enthält die Strafrichter-Oberfläche nicht (Entwickler-Build). Bitte eine offizielle Version installieren.",
+    currentRuns: "Aktuelle Läufe",
+    currentRunsHint: "Pro Bahn den Lauf wählen, der gerade startet — die Strafrichter sehen ihn sofort.",
+    lane: (n: number) => `Bahn ${n}`,
+    noRun: "— kein Lauf —",
+    next: "Nächster",
+    nextTitle: "Nächsten Lauf dieser Bahn wählen",
+    review: "Prüfung",
+    noCurrent: "Kein aktueller Lauf — oben einen Lauf wählen.",
+    otherRun: "Weiteren Lauf prüfen",
+    otherRunPlaceholder: "Lauf wählen …",
+    upload: "Ins Web hochladen",
+    uploadHint: "Braucht Internet und das gekoppelte Web-Konto.",
+    lastUpload: (at: string) => `Zuletzt hochgeladen: ${at}`,
+  },
+
+  review: {
+    time: "Zeit",
+    result: "Ergebnis",
+    noTime: "keine Zeit",
+    handTime: "Handzeit",
+    handTimeButton: "Handzeit …",
+    lineup: "Besetzung",
+    lineupButton: "Besetzung …",
+    lineupMissing: "Besetzung fehlt",
+    lineupBy: (by: string) => (by === "startlinie" ? "Startlinie" : "Organisator"),
+    errors: (n: number) => `Fehler (${n})`,
+    none: "Keine Fehler gemeldet.",
+    confirm: "Bestätigen",
+    withdraw: "Zurücknehmen",
+    takeOver: "Übernehmen",
+    takeOverTitle: (title: string) => `Lauf übernehmen – ${title}`,
+    takeOverAfter: "Ergebnis danach:",
+    takeOverFvAck:
+      "Ich bestätige den Fehlversuch (mit dem Mannschaftsführer geklärt) – der Lauf wird ungültig.",
+    fvTitle: "Fehlversuch bestätigen?",
+    fvConfirm: "FV bestätigen – Lauf ungültig",
+    fvBody: (title: string) =>
+      `Mit der Bestätigung wird ${title} ungültig (keine Zeit). Bitte vorher mit dem Mannschaftsführer klären.`,
+    cancel: "Abbrechen",
+    recordedAt: "Erfasst um",
+    sz: "Strafzeit: +15 s",
+    fv: "Fehlversuch: Lauf ungültig",
+  },
+
+  handTime: {
+    title: (title: string) => `Handzeit – ${title}`,
+    intro:
+      "Nur eintragen, wenn die Lichtschranke ausgefallen ist. Ergebnis = Mittelwert der beiden Stoppuhren, auf 1/100 s gerundet. Format m:ss,hh oder ss,hh.",
+    lightBarrier: (t: string) => `Lichtschranke bisher: ${t}`,
+    watch1: "Stoppuhr 1",
+    watch2: "Stoppuhr 2",
+    mean: "Mittelwert (Handzeit)",
+    save: "Handzeit speichern",
+    saving: "Speichere …",
+    clear: "Handzeit entfernen",
+    clearHint:
+      "„Handzeit entfernen“ stellt auf Lichtschranke zurück; die gespeicherte Zeit bleibt, bis der Zeitnehmer eine neue Zeit überträgt.",
+    cancel: "Abbrechen",
+  },
+
+  lineup: {
+    title: (title: string) => `Besetzung – ${title}`,
+    intro: "Wer ist tatsächlich gelaufen? Ankreuzen (Ersatzläufer eingeschlossen).",
+    empty: "Für diese Mannschaft sind keine Läufer hinterlegt.",
+    save: "Besetzung speichern",
+    clear: "Leeren",
+    cancel: "Abbrechen",
+    count: (n: number) => (n === 1 ? "1 Läufer:in" : `${n} Läufer:innen`),
+  },
+
+  upload: {
+    title: "Ins Web hochladen",
+    body:
+      "Lädt alle auf diesem Laptop erfassten Laufzeiten, Fehler (inkl. Prüfstatus), Besetzungen und Handzeiten zum Web hoch. Mehrfaches Hochladen ist unschädlich.",
+    summary: (runs: number, penalties: number) =>
+      `${runs === 1 ? "1 geänderter Lauf" : `${runs} geänderte Läufe`} · ${
+        penalties === 1 ? "1 Fehler" : `${penalties} Fehler`
+      }`,
+    goLive: "Danach auf Live umschalten (Web und Desktop)",
+    start: "Jetzt hochladen",
+    busy: "Lade hoch …",
+    retry: "Erneut versuchen",
+    close: "Schließen",
+    cancel: "Abbrechen",
+    done: "Hochgeladen",
+    wentLive: "Desktop und Web sind jetzt auf Live.",
+    goLiveFailed: "Hochgeladen — das Umschalten auf Live hat nicht geklappt; bitte später erneut wählen.",
+    fallback: "Kein Internet? KiDo-Datei exportieren (Menü) und im Web importieren.",
   },
 
   results: {
@@ -244,7 +364,7 @@ export const t = {
     lane: "Bahn",
     runner: "Läufer:in",
     syncLive: "Live-Übertragung an ki-do.it",
-    syncOffline: "On-prem — Ergebnisse werden lokal gesichert, keine Übertragung",
+    syncOffline: "On-prem — Strafrichter verbinden sich mit diesem Laptop, alles wird lokal gesichert",
     currentRuns: "Aktuelle Läufe",
     handTime: "Handzeit",
     closeSnapshot: "Wettkampf schließen",

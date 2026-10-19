@@ -8,6 +8,7 @@ import type {
   Wertungsgruppe,
 } from "../lib/cloudTypes";
 import { laneCountFor, resolveLane } from "../lib/lanes";
+import { allPenalties } from "../lib/penalties";
 
 interface Props {
   snapshot: DisciplinePayload;
@@ -135,7 +136,7 @@ export function LaneAssignmentPanel({
           })}
         </div>
 
-      {snapshot.approved_penalties.length > 0 && (
+      {allPenalties(snapshot).length > 0 && (
         <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-200/50">
           {t.laneAssign.penaltyHint}
         </p>
@@ -175,7 +176,7 @@ function RunHint({
   const entry = snapshot.team_entries.find(
     (e) => e.team_id === run.team_id && e.discipline_id === run.discipline_id,
   );
-  const penalties = penaltiesForRun(snapshot.approved_penalties, run.id).filter(
+  const penalties = penaltiesForRun(allPenalties(snapshot), run.id).filter(
     (p) => p.status !== "rejected",
   );
   const dq = penalties.some((p) => p.kind === "fv");

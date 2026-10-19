@@ -18,7 +18,7 @@ interface Props {
   onBack: () => void;
 }
 
-const APP_VERSION = "0.6.0";
+const APP_VERSION = "0.7.0";
 
 /**
  * WG rankings + Tagessieger, computed locally with `kido_core::scoring`
