@@ -1,22 +1,39 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-use serde::{Deserialize, Serialize};
+//! Whether a discipline is run **live** (judges + desktop talk to the
+//! cloud API) or **offline** (= on-prem: the desktop runs a local server
+//! in the venue network and results are re-uploaded as a `.kido` file).
+//!
+//! While `Offline`:
+//! - Decider input is disabled (the page renders a stub).
+//! - Live ingest endpoints reject with 409.
+//! - Result-file uploads are accepted.
+//!
+//! While `Live`:
+//! - Result-file uploads are rejected with 409.
+//!
+//! The type lives in `kido-core`; wire value `on_prem` is accepted as an
+//! alias for `offline`.
 
-/// Whether a competition is being run **live** (organizer pushes timing data
-/// from the desktop app via the API) or **offline** (operator runs the event
-/// from the standalone app and re-uploads results when finished).
-///
-/// While `Offline`:
-/// - Decider input is disabled (the page renders a stub).
-/// - Live ingest endpoints reject with 409.
-/// - Result-file uploads are accepted.
-///
-/// While `Live`:
-/// - Result-file uploads are rejected with 409.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum SyncMode {
-    #[default]
-    Live,
-    Offline,
+pub use kido_core::discipline::SyncMode;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_values() {
+        assert_eq!(serde_json::to_string(&SyncMode::Live).unwrap(), "\"live\"");
+        assert_eq!(
+            serde_json::to_string(&SyncMode::Offline).unwrap(),
+            "\"offline\""
+        );
+        assert_eq!(SyncMode::default(), SyncMode::Live);
+    }
+
+    #[test]
+    fn on_prem_alias_reads_as_offline() {
+        let m: SyncMode = serde_json::from_str("\"on_prem\"").unwrap();
+        assert_eq!(m, SyncMode::Offline);
+    }
 }

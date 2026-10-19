@@ -74,7 +74,9 @@ pub struct EventSummary {
     pub location: Option<String>,
     pub is_active: bool,
     pub current_discipline_id: Option<Uuid>,
+    /// Legacy mirror of `current_run_ids[0]`.
     pub current_run_id: Option<Uuid>,
+    pub current_run_ids: Vec<Uuid>,
 }
 
 pub async fn list_events(
@@ -91,7 +93,8 @@ pub async fn list_events(
             location: e.location,
             is_active: e.is_active,
             current_discipline_id: e.current_discipline_id,
-            current_run_id: e.current_run_id,
+            current_run_id: e.current_run_ids.first().copied(),
+            current_run_ids: e.current_run_ids,
         })
         .collect();
     Ok(Json(summaries))
@@ -105,6 +108,8 @@ pub struct DisciplineSummary {
     pub event_date: chrono::NaiveDate,
     pub name: String,
     pub mode: crate::models::TimerMode,
+    pub lane_count: u8,
+    pub judge_mode: crate::models::JudgeMode,
     pub sync_mode: SyncMode,
     /// `true` iff this discipline is the one currently selected on the
     /// active event's lane. The desktop usually pairs to this one.
@@ -128,6 +133,8 @@ pub async fn list_disciplines(
                 event_date: ev.date,
                 name: d.name,
                 mode: d.mode,
+                lane_count: d.lane_count,
+                judge_mode: d.judge_mode,
                 sync_mode: d.sync_mode,
                 is_current,
             });
@@ -170,8 +177,8 @@ pub async fn submit_run_result(
             break;
         }
     }
-    let (event, discipline) = found
-        .ok_or_else(|| AppError::NotFound(format!("discipline {discipline_id}")))?;
+    let (event, discipline) =
+        found.ok_or_else(|| AppError::NotFound(format!("discipline {discipline_id}")))?;
 
     if discipline.sync_mode != SyncMode::Live {
         return Err(AppError::Conflict(

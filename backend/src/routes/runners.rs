@@ -30,9 +30,8 @@ pub struct RunnerInput {
     pub last_name: String,
     pub birth_date: NaiveDate,
     pub position: u32,
-    /// Required on **new** writes (validated in `validate`); the field
-    /// itself stays `Option<_>` because pre-migration runner rows in
-    /// DDB may still surface here on update via the existing-row merge.
+    /// Optional and legacy — no longer written by the UI (the
+    /// Wertungsgruppe is ticked by the club, there is no gender logic).
     #[serde(default)]
     pub gender: Option<Gender>,
 }
@@ -44,7 +43,7 @@ pub async fn create(
     Json(input): Json<RunnerInput>,
 ) -> AppResult<(StatusCode, Json<Runner>)> {
     require_owned(&state, &auth, event_id).await?;
-    validate(&input, /* require_gender = */ true)?;
+    validate(&input)?;
     let now = Utc::now();
     let runner = Runner {
         id: Uuid::new_v4(),
@@ -69,10 +68,7 @@ pub async fn update(
     Json(input): Json<RunnerInput>,
 ) -> AppResult<Json<Runner>> {
     require_owned(&state, &auth, event_id).await?;
-    // Updating a *pre-migration* runner is allowed without gender (the
-    // server will keep the previously-stored value, which may also be
-    // None). Once any value is present, callers should resend it.
-    validate(&input, /* require_gender = */ false)?;
+    validate(&input)?;
 
     let existing = runners::list_for_team(&state.db, event_id, team_id)
         .await?
@@ -93,8 +89,7 @@ pub async fn update(
         birth_date: input.birth_date,
         position: input.position,
         // Prefer the incoming gender; fall back to the previously-stored
-        // one so PUT bodies that omit the field don't accidentally wipe
-        // it for pre-migration runners.
+        // one so PUT bodies that omit the field don't wipe legacy values.
         gender: input.gender.or(existing.gender),
         created_at: existing.created_at,
         updated_at: Utc::now(),
@@ -118,18 +113,55 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn validate(input: &RunnerInput, require_gender: bool) -> AppResult<()> {
+pub fn validate(input: &RunnerInput) -> AppResult<()> {
     if input.first_name.trim().is_empty() {
         return Err(AppError::Validation("first_name must not be empty".into()));
     }
     if input.last_name.trim().is_empty() {
         return Err(AppError::Validation("last_name must not be empty".into()));
     }
-    // Gender is mandatory on new writes — the WG derivation can't
-    // dispatch all-male vs all-female rosters otherwise. We keep the
-    // model field optional on read to tolerate pre-migration items.
-    if require_gender && input.gender.is_none() {
-        return Err(AppError::Validation("gender must be set".into()));
-    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gender_is_optional() {
+        let body = serde_json::json!({
+            "first_name": "Erika",
+            "last_name": "Mustermann",
+            "birth_date": "2015-04-12",
+            "position": 1
+        });
+        let input: RunnerInput = serde_json::from_value(body).unwrap();
+        assert_eq!(input.gender, None);
+        assert!(validate(&input).is_ok());
+    }
+
+    #[test]
+    fn legacy_gender_still_accepted() {
+        let body = serde_json::json!({
+            "first_name": "Erika",
+            "last_name": "Mustermann",
+            "birth_date": "2015-04-12",
+            "position": 1,
+            "gender": "female"
+        });
+        let input: RunnerInput = serde_json::from_value(body).unwrap();
+        assert_eq!(input.gender, Some(Gender::Female));
+    }
+
+    #[test]
+    fn names_required() {
+        let body = serde_json::json!({
+            "first_name": " ",
+            "last_name": "Mustermann",
+            "birth_date": "2015-04-12",
+            "position": 1
+        });
+        let input: RunnerInput = serde_json::from_value(body).unwrap();
+        assert_eq!(validate(&input).unwrap_err().code(), "validation");
+    }
 }

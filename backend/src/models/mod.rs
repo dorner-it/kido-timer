@@ -15,13 +15,13 @@ pub mod wertungsgruppe;
 
 pub use discipline::Discipline;
 pub use event::Event;
-pub use penalty::{Penalty, PenaltyStatus};
-pub use run::{Run, RunStatus};
+pub use penalty::{Penalty, PenaltyKind, PenaltyStatus};
+pub use run::{LineupConfirmedBy, Run, RunStatus, TimeSource};
 pub use runner::{Gender, Runner};
 pub use station::StationKind;
 pub use sync_mode::SyncMode;
 pub use team::Team;
-pub use team_entry::TeamEntry;
-pub use timer_mode::TimerMode;
+pub use team_entry::{TeamEntry, TeamEntryView, WgHistoryEntry};
+pub use timer_mode::{JudgeMode, TimerMode};
 pub use user::User;
-pub use wertungsgruppe::{WgError, Wertungsgruppe};
+pub use wertungsgruppe::{Wertungsgruppe, WgWarning};

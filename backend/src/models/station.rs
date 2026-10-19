@@ -1,94 +1,66 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-use serde::{Deserialize, Serialize};
+//! Judging posts (Wertungsrichter-Stationen). The type lives in the
+//! shared `kido-core` crate; this module re-exports it so existing call
+//! sites keep compiling.
+//!
+//! Canonical wire keys follow the FBL Wertungsbögen: `startlinie`,
+//! `verteilerlinie`, `strahlrohrlinie`, `knotengestell`,
+//! `angriffslinie`, `podest`. The pre-2027 keys `start`, `verteiler`,
+//! `strahlrohr`, `knoten`, `kuebelspritze` are still accepted on input
+//! (and therefore on legacy DynamoDB rows); output is always canonical.
 
-use crate::models::timer_mode::TimerMode;
-
-/// A judging post (Strafrichter station) along the track. A station is
-/// the operator's seat for the day — one decider stays at "Knoten",
-/// another at "Strahlrohr", and so on. The station they pick gets
-/// recorded on every penalty so the organiser can see *where* a fault
-/// was observed, not just *who* observed it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StationKind {
-    Start,
-    Verteiler,
-    Strahlrohr,
-    Knoten,
-    Kuebelspritze,
-    // Löschangriff-only:
-    Podest,
-    Strahlrohrlinie,
-}
-
-impl StationKind {
-    pub const ALL: [StationKind; 7] = [
-        StationKind::Start,
-        StationKind::Verteiler,
-        StationKind::Strahlrohr,
-        StationKind::Knoten,
-        StationKind::Kuebelspritze,
-        StationKind::Podest,
-        StationKind::Strahlrohrlinie,
-    ];
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            StationKind::Start => "start",
-            StationKind::Verteiler => "verteiler",
-            StationKind::Strahlrohr => "strahlrohr",
-            StationKind::Knoten => "knoten",
-            StationKind::Kuebelspritze => "kuebelspritze",
-            StationKind::Podest => "podest",
-            StationKind::Strahlrohrlinie => "strahlrohrlinie",
-        }
-    }
-
-    /// Whether this station can be staffed under the given timer mode.
-    ///
-    /// Stations `Podest` and `Strahlrohrlinie` are Löschangriff-only.
-    /// Everything else is available in every discipline.
-    pub fn allowed_for(self, mode: TimerMode) -> bool {
-        match self {
-            StationKind::Podest | StationKind::Strahlrohrlinie => {
-                matches!(mode, TimerMode::Loeschangriff)
-            }
-            StationKind::Start
-            | StationKind::Verteiler
-            | StationKind::Strahlrohr
-            | StationKind::Knoten
-            | StationKind::Kuebelspritze => match mode {
-                TimerMode::Gruppenstaffette | TimerMode::Loeschangriff => true,
-            },
-        }
-    }
-
-    /// Convenience list of every station valid for the given mode, in
-    /// the canonical order used on the picker.
-    pub fn for_mode(mode: TimerMode) -> Vec<StationKind> {
-        StationKind::ALL
-            .iter()
-            .copied()
-            .filter(|s| s.allowed_for(mode))
-            .collect()
-    }
-}
+pub use kido_core::station::StationKind;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::timer_mode::TimerMode;
 
     #[test]
-    fn serializes_snake_case() {
-        assert_eq!(
-            serde_json::to_string(&StationKind::Kuebelspritze).unwrap(),
-            "\"kuebelspritze\""
-        );
-        assert_eq!(
-            serde_json::to_string(&StationKind::Strahlrohrlinie).unwrap(),
-            "\"strahlrohrlinie\""
-        );
+    fn serializes_canonical_keys() {
+        let expected = [
+            (StationKind::Startlinie, "startlinie"),
+            (StationKind::Verteilerlinie, "verteilerlinie"),
+            (StationKind::Strahlrohrlinie, "strahlrohrlinie"),
+            (StationKind::Knotengestell, "knotengestell"),
+            (StationKind::Angriffslinie, "angriffslinie"),
+            (StationKind::Podest, "podest"),
+        ];
+        for (s, key) in expected {
+            assert_eq!(serde_json::to_string(&s).unwrap(), format!("\"{key}\""));
+        }
+    }
+
+    #[test]
+    fn legacy_keys_deserialize_to_canonical() {
+        let cases = [
+            ("start", StationKind::Startlinie),
+            ("verteiler", StationKind::Verteilerlinie),
+            ("strahlrohr", StationKind::Strahlrohrlinie),
+            ("knoten", StationKind::Knotengestell),
+            ("kuebelspritze", StationKind::Angriffslinie),
+            ("strahlrohrlinie", StationKind::Strahlrohrlinie),
+            ("podest", StationKind::Podest),
+        ];
+        for (legacy, canonical) in cases {
+            let parsed: StationKind = serde_json::from_str(&format!("\"{legacy}\"")).unwrap();
+            assert_eq!(parsed, canonical, "{legacy}");
+            // Re-serialising emits the canonical key, never the alias.
+            let out = serde_json::to_value(parsed).unwrap();
+            if !matches!(legacy, "strahlrohrlinie" | "podest") {
+                assert_ne!(
+                    out,
+                    serde_json::json!(legacy),
+                    "{legacy} must not round-trip"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_key_rejected() {
+        assert!(serde_json::from_str::<StationKind>("\"zielrichter\"").is_err());
     }
 
     #[test]
@@ -100,33 +72,48 @@ mod tests {
         }
     }
 
-    #[test]
-    fn loeschangriff_only_stations_are_loeschangriff() {
-        assert!(StationKind::Podest.allowed_for(TimerMode::Loeschangriff));
-        assert!(!StationKind::Podest.allowed_for(TimerMode::Gruppenstaffette));
+    // --- behaviour owned by kido-core (panics with `todo!()` until the
+    // kido-core bodies are merged) ---
 
-        assert!(StationKind::Strahlrohrlinie.allowed_for(TimerMode::Loeschangriff));
-        assert!(!StationKind::Strahlrohrlinie.allowed_for(TimerMode::Gruppenstaffette));
+    #[test]
+    fn stations_per_mode() {
+        assert_eq!(
+            StationKind::for_mode(TimerMode::Gruppenstaffette),
+            &[
+                StationKind::Startlinie,
+                StationKind::Verteilerlinie,
+                StationKind::Strahlrohrlinie,
+                StationKind::Knotengestell,
+                StationKind::Angriffslinie,
+            ]
+        );
+        assert_eq!(
+            StationKind::for_mode(TimerMode::Loeschangriff),
+            &[StationKind::Podest, StationKind::Angriffslinie]
+        );
+        assert!(!StationKind::Podest.allowed_for(TimerMode::Gruppenstaffette));
+        assert!(!StationKind::Knotengestell.allowed_for(TimerMode::Loeschangriff));
+        assert!(StationKind::Angriffslinie.allowed_for(TimerMode::Loeschangriff));
     }
 
     #[test]
-    fn common_stations_are_universal() {
-        for mode in [TimerMode::Gruppenstaffette, TimerMode::Loeschangriff] {
-            for s in [
-                StationKind::Start,
-                StationKind::Verteiler,
-                StationKind::Strahlrohr,
-                StationKind::Knoten,
-                StationKind::Kuebelspritze,
-            ] {
-                assert!(s.allowed_for(mode), "{s:?} should be allowed for {mode:?}");
-            }
+    fn only_startlinie_records_lineup() {
+        for s in StationKind::ALL {
+            assert_eq!(s.records_lineup(), s == StationKind::Startlinie, "{s:?}");
         }
     }
 
     #[test]
-    fn for_mode_returns_seven_for_loeschangriff_five_for_gruppenstaffette() {
-        assert_eq!(StationKind::for_mode(TimerMode::Loeschangriff).len(), 7);
-        assert_eq!(StationKind::for_mode(TimerMode::Gruppenstaffette).len(), 5);
+    fn parse_accepts_legacy_and_canonical() {
+        assert_eq!(
+            StationKind::parse("knoten"),
+            Some(StationKind::Knotengestell)
+        );
+        assert_eq!(
+            StationKind::parse("knotengestell"),
+            Some(StationKind::Knotengestell)
+        );
+        assert_eq!(StationKind::parse("nope"), None);
+        assert_eq!(StationKind::Knotengestell.as_str(), "knotengestell");
     }
 }

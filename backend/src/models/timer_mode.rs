@@ -1,36 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT
 
-use serde::{Deserialize, Serialize};
+//! Discipline-specific timer modes. The type lives in the shared
+//! `kido-core` crate (used by backend + desktop); this module re-exports
+//! it so existing call sites (`crate::models::timer_mode::TimerMode`)
+//! keep compiling.
+//!
+//! Wire values (`schema_version >= 3`): `gruppenstaffette`,
+//! `loeschangriff`. The legacy v1 strings (`single_lane`,
+//! `two_lane_parallel`, `relay`, `individual`) are rejected.
 
-/// Discipline-specific timer modes for fire-department running disciplines.
-///
-/// Replaces the previous generic v1 enum (`single_lane`, `two_lane_parallel`,
-/// `relay`, `individual`) with the two disciplines actually run on TRV Kocab
-/// hardware in the field. The lane count is intrinsic to the discipline and
-/// drives UI (lane pickers, deciders) and import validation.
-///
-/// Both the web app and the standalone desktop app mirror this list verbatim
-/// (`schema_version = 3`). Adding a variant requires a coordinated release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TimerMode {
-    /// Gruppenstaffette — 2 lanes, group-vs-group relay format.
-    Gruppenstaffette,
-    /// Löschangriff — 4 lanes, classic fire-attack discipline.
-    Loeschangriff,
-}
-
-impl TimerMode {
-    /// Number of timer lanes the discipline occupies on the TRV Kocab
-    /// hardware. Drives lane-picker visibility in the organiser UI and
-    /// validation of `TeamEntry.lane` on the backend.
-    pub const fn lane_count(self) -> u8 {
-        match self {
-            TimerMode::Gruppenstaffette => 2,
-            TimerMode::Loeschangriff => 4,
-        }
-    }
-}
+pub use kido_core::discipline::{JudgeMode, TimerMode};
 
 #[cfg(test)]
 mod tests {
@@ -58,12 +37,6 @@ mod tests {
     }
 
     #[test]
-    fn lane_counts() {
-        assert_eq!(TimerMode::Gruppenstaffette.lane_count(), 2);
-        assert_eq!(TimerMode::Loeschangriff.lane_count(), 4);
-    }
-
-    #[test]
     fn rejects_legacy_variants() {
         for legacy in [
             "\"single_lane\"",
@@ -76,5 +49,36 @@ mod tests {
                 "legacy variant {legacy} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn judge_mode_wire_values_and_default() {
+        assert_eq!(JudgeMode::default(), JudgeMode::PerStation);
+        assert_eq!(
+            serde_json::to_string(&JudgeMode::PerStation).unwrap(),
+            "\"per_station\""
+        );
+        assert_eq!(
+            serde_json::to_string(&JudgeMode::PerStationAndLane).unwrap(),
+            "\"per_station_and_lane\""
+        );
+        assert!(serde_json::from_str::<JudgeMode>("\"per_lane\"").is_err());
+    }
+
+    // --- behaviour owned by kido-core (panics with `todo!()` until the
+    // kido-core bodies are merged) ---
+
+    #[test]
+    fn max_lanes_per_mode() {
+        assert_eq!(TimerMode::Gruppenstaffette.max_lanes(), 2);
+        assert_eq!(TimerMode::Loeschangriff.max_lanes(), 4);
+    }
+
+    #[test]
+    fn allowed_and_default_lane_counts() {
+        assert_eq!(TimerMode::Gruppenstaffette.allowed_lane_counts(), &[1, 2]);
+        assert_eq!(TimerMode::Loeschangriff.allowed_lane_counts(), &[4]);
+        assert_eq!(TimerMode::Gruppenstaffette.default_lane_count(), 2);
+        assert_eq!(TimerMode::Loeschangriff.default_lane_count(), 4);
     }
 }

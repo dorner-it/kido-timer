@@ -28,6 +28,7 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 hmac = "0.12"
 jsonwebtoken = "9"
+kido-core = { path = "../crates/kido-core" }
 lambda_http = "0.14"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
