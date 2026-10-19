@@ -278,3 +278,36 @@ describe('organizer requests: 401 still redirects to /login (regression)', () =>
     expect(replace).not.toHaveBeenCalled();
   });
 });
+
+describe('legacy slot pad (/decider/:owner/:slot/:token) on 401', () => {
+  beforeEach(() => stubWindow('/decider/o/2/slot-tok'));
+
+  const slotItem = (client_id: string) => ({
+    client_id,
+    owner_sub: 'o',
+    slot: 2,
+    token: 'slot-tok',
+    delta_ms: 15_000,
+    reason_code: null,
+    label: '+15 s',
+    queued_at: 1,
+  });
+
+  it('slot state 401 is an invalid-access error and never redirects', async () => {
+    fetchMock.mockImplementation(async () => errorResponse(401));
+    const { apiClient: fresh_ } = await fresh();
+    const err = await fresh_.decider.state('o', 2, 'slot-tok').catch((e: unknown) => e);
+    const { isInvalidAccessError: isInvalid } = await import('../judge-access');
+    expect(isInvalid(err)).toBe(true);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('slot submits with 401 stay queued (blocked) and are counted', async () => {
+    penaltyQueue.enqueue(slotItem('s1'));
+    fetchMock.mockImplementation(async () => errorResponse(401));
+    const res = await drainOnce();
+    expect(res.unauthorized?.map((i) => i.client_id)).toEqual(['s1']);
+    expect(countUnsentForAccess(penaltyQueue.list(), 'o', 'slot-tok')).toBe(1);
+    expect(replace).not.toHaveBeenCalled();
+  });
+});

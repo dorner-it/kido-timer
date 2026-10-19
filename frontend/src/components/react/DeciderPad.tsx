@@ -11,6 +11,11 @@ import {
 } from '../../lib/decider-presets';
 import { formatTimeMs } from '../../lib/format';
 import {
+  countUnsentForAccess,
+  isInvalidAccessError,
+  isInvalidAccessStatus,
+} from '../../lib/judge-access';
+import {
   attemptSubmit,
   clientId,
   droppedLog,
@@ -18,9 +23,11 @@ import {
   usePenaltyQueue,
   type DroppedSubmit,
   type QueuedSlotSubmit,
+  type QueuedSubmit,
 } from '../../lib/penalty-queue';
 import type { TimerMode } from '../../lib/api';
 import { Brandmark } from './Brandmark';
+import { InvalidAccessScreen } from './judge/InvalidAccessScreen';
 
 /**
  * Legacy slot pad — route `/decider/:owner/:slot/:token`. The slot *is*
@@ -62,6 +69,9 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
   const [busy, setBusy] = useState(false);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  /** 401: slot link rotated/invalid → final screen, polling stops. */
+  const [invalid, setInvalid] = useState(false);
+  const markInvalid = useCallback(() => setInvalid(true), []);
 
   const presets = state && state.discipline ? PRESETS_BY_MODE[state.discipline.mode] : [];
   const hasRun = !!state?.current_run;
@@ -80,9 +90,20 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
     setError(`Strafe „${entry.label}" wurde verworfen (${entry.reason}). Bitte nochmal eingeben.`);
   }, []);
 
+  const handleUnauthorized = useCallback(
+    (entry: QueuedSubmit) => {
+      if (entry.owner_sub === ownerSub && entry.token === token) markInvalid();
+    },
+    [ownerSub, token, markInvalid],
+  );
+
   const queueOptions = useMemo(
-    () => ({ onConfirmed: handleConfirmed, onDropped: handleDropped }),
-    [handleConfirmed, handleDropped],
+    () => ({
+      onConfirmed: handleConfirmed,
+      onDropped: handleDropped,
+      onUnauthorized: handleUnauthorized,
+    }),
+    [handleConfirmed, handleDropped, handleUnauthorized],
   );
   const { items: queued, online, draining } = usePenaltyQueue(queueOptions);
 
@@ -96,22 +117,26 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
         disabled: r.disabled,
       });
       setError(null);
+      // The link works (again): let blocked queue items of it retry.
+      penaltyQueue.unblock(ownerSub, token);
     } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.status === 401) setError('Ungültiger Token. QR-Code neu laden.');
-        else if (err.status === 404) setError('Aktuell kein aktiver Wettkampf.');
+      if (isInvalidAccessError(err)) {
+        markInvalid();
+      } else if (err instanceof ApiError) {
+        if (err.status === 404) setError('Aktuell kein aktiver Wettkampf.');
         else setError(err.message);
       } else {
         setError('Verbindung verloren. Neu versuchen …');
       }
     }
-  }, [ownerSub, slotNumber, token]);
+  }, [ownerSub, slotNumber, token, markInvalid]);
 
   useEffect(() => {
-    refresh();
+    if (invalid) return;
+    void refresh();
     const t = window.setInterval(refresh, 4000);
     return () => window.clearInterval(t);
-  }, [refresh]);
+  }, [refresh, invalid]);
 
   const submit = async (flash: string, label: string, deltaMs: number, reason: string | null) => {
     if (busy) return;
@@ -143,6 +168,12 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
         queued_at: Date.now(),
       };
       const result = await attemptSubmit(queueItem);
+      if (!result.ok && isInvalidAccessStatus(result.status)) {
+        // Keep it (blocked, counted on the invalid-access screen).
+        penaltyQueue.block(queueItem);
+        markInvalid();
+        return;
+      }
       if (!result.ok && result.retriable) penaltyQueue.enqueue(queueItem);
 
       if (result.ok) {
@@ -175,9 +206,19 @@ export default function DeciderPad({ ownerSub, slotIndex, token }: DeciderPadPro
       await apiClient.decider.withdraw(ownerSub, slotNumber, token, target.id);
       setConfirmed((c) => c.filter((x) => x.client_id !== target.client_id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Zurückziehen fehlgeschlagen');
+      if (isInvalidAccessError(err)) markInvalid();
+      else setError(err instanceof Error ? err.message : 'Zurückziehen fehlgeschlagen');
     }
   };
+
+  if (invalid) {
+    return (
+      <InvalidAccessScreen
+        unsent={countUnsentForAccess(queued, ownerSub, token)}
+        onRetry={() => window.location.reload()}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
