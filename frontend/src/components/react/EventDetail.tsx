@@ -23,6 +23,7 @@ import {
   laneCountLabel,
 } from '../../lib/lanes';
 import { disciplineFormSchema, fieldErrors } from '../../lib/schemas';
+import { QrIconButton } from './QrCodeModal';
 import TeamRoster from './TeamRoster';
 import PenaltiesPanel from './PenaltiesPanel';
 import EntriesPanel from './EntriesPanel';
@@ -579,6 +580,10 @@ function DecidersPanel({
   const { event } = data;
   const [busy, setBusy] = useState(false);
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  // 2027 judge app: one shared station token, station picked in the app.
+  const stationUrl = event.station_token
+    ? `${origin}/decider/${event.owner_sub}/${event.station_token}`
+    : '';
 
   const rotate = async () => {
     if (
@@ -601,6 +606,31 @@ function DecidersPanel({
         Vier QR-Codes — einer pro Strafrichter-Slot. Verteile sie am Ort und
         rotiere bei Verlust.
       </p>
+      {stationUrl && (
+        <div className="surface flex flex-col gap-2 p-5">
+          <div className="flex items-baseline justify-between">
+            <span className="label">Strafrichter-Zugang (Stationen)</span>
+          </div>
+          <code className="block break-all rounded border border-[color:var(--hairline-color)] bg-[color:var(--soft-fill)] px-3 py-2 font-mono text-[11px] text-ink-100">
+            {stationUrl}
+          </code>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                void navigator.clipboard.writeText(stationUrl);
+              }}
+            >
+              Kopieren
+            </button>
+            <a href={stationUrl} target="_blank" rel="noreferrer" className="btn">
+              Öffnen
+            </a>
+            <QrIconButton title="Strafrichter-Zugang (Stationen)" url={stationUrl} />
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {event.decider_tokens.map((token, i) => {
           const slot = i + 1;
@@ -634,6 +664,7 @@ function DecidersPanel({
                 >
                   Öffnen
                 </a>
+                <QrIconButton title={`Strafrichter B${slot}`} url={url} />
               </div>
             </div>
           );
