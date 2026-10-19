@@ -48,7 +48,7 @@ desktop-dev:
 	cd desktop && npx tauri dev
 
 desktop-check:
-	cd desktop && npm run build
+	cd desktop && npm run build && npm test
 	cd desktop/src-tauri && cargo check --all-targets && cargo test
 
 core-test:
