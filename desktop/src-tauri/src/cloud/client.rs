@@ -4,8 +4,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::types::{
-    DisciplineListItem, DisciplinePayload, EventSummary, HmacKeyResponse, MeResponse, Run,
-    RunResultRequest,
+    Discipline, DisciplineListItem, DisciplinePayload, EventSummary, HmacKeyResponse, MeResponse,
+    OnPremUploadRequest, OnPremUploadResponse, Run, RunResultRequest, SyncMode, SyncModeRequest,
 };
 
 const USER_AGENT: &str = concat!("KiDo-Timer/", env!("CARGO_PKG_VERSION"));
@@ -85,6 +85,48 @@ impl CloudClient {
         decode(resp).await
     }
 
+    /// A2: switch the web's sync mode of a discipline (e.g. `live` before
+    /// result POSTs, which the web rejects with 409 while `offline`).
+    pub async fn set_sync_mode(
+        &self,
+        discipline_id: Uuid,
+        mode: SyncMode,
+    ) -> Result<Discipline, String> {
+        let url = self.url(&format!(
+            "/api/export/disciplines/{discipline_id}/sync-mode"
+        ));
+        let resp = self
+            .http
+            .post(url)
+            .header("X-API-Key", &self.api_key)
+            .json(&SyncModeRequest { sync_mode: mode })
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        decode(resp).await
+    }
+
+    /// A3: upload the on-prem results (changed runs, all penalties).
+    pub async fn onprem_upload(
+        &self,
+        discipline_id: Uuid,
+        body: &OnPremUploadRequest,
+    ) -> Result<OnPremUploadResponse, String> {
+        let url = self.url(&format!(
+            "/api/export/disciplines/{discipline_id}/onprem-upload"
+        ));
+        let resp = self
+            .http
+            .post(url)
+            .header("X-API-Key", &self.api_key)
+            .timeout(std::time::Duration::from_secs(60))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("upload failed: {e}"))?;
+        decode(resp).await
+    }
+
     async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self
             .http
@@ -141,4 +183,165 @@ async fn success_bytes(resp: reqwest::Response) -> Result<Vec<u8>, String> {
         ),
         s => format!("http {}: {detail}", s.as_u16()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! A2 / A3 against a mock web API (axum on an ephemeral port).
+    use std::sync::Arc;
+
+    use axum::extract::{Path, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use parking_lot::Mutex;
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::cloud::fixtures::{id, sample_payload, DISCIPLINE};
+    use crate::cloud::types::OnPremUploadRun;
+
+    #[derive(Default)]
+    struct Seen {
+        path_id: Option<String>,
+        api_key: Option<String>,
+        body: Option<Value>,
+    }
+
+    type Shared = Arc<Mutex<Seen>>;
+
+    fn remember(seen: &Shared, id: String, headers: &HeaderMap, body: Value) {
+        let mut s = seen.lock();
+        s.path_id = Some(id);
+        s.api_key = headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        s.body = Some(body);
+    }
+
+    async fn sync_mode(
+        State(seen): State<Shared>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        remember(&seen, id, &headers, body.clone());
+        let mut d = serde_json::to_value(sample_payload().discipline).unwrap();
+        d["sync_mode"] = body["sync_mode"].clone();
+        (StatusCode::OK, Json(d))
+    }
+
+    async fn upload(
+        State(seen): State<Shared>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        remember(&seen, id, &headers, body.clone());
+        if body["penalties"].as_array().is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code": "validation", "message": "validation: penalties"}})),
+            );
+        }
+        let runs = body["runs"].as_array().map_or(0, Vec::len);
+        let pens = body["penalties"].as_array().map_or(0, Vec::len);
+        (
+            StatusCode::OK,
+            Json(json!({"runs_updated": runs, "penalties_upserted": pens})),
+        )
+    }
+
+    async fn conflict() -> (StatusCode, Json<Value>) {
+        (
+            StatusCode::CONFLICT,
+            Json(json!({"error": {"code": "conflict", "message": "conflict: nope"}})),
+        )
+    }
+
+    async fn mock() -> (String, Shared) {
+        let seen: Shared = Arc::default();
+        let app = Router::new()
+            .route("/api/export/disciplines/{id}/sync-mode", post(sync_mode))
+            .route("/api/export/disciplines/{id}/onprem-upload", post(upload))
+            .route(
+                "/api/export/disciplines/{id}/runs/{run}/result",
+                post(conflict),
+            )
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/"), seen)
+    }
+
+    #[tokio::test]
+    async fn a2_switches_web_sync_mode() {
+        let (base, seen) = mock().await;
+        let client = CloudClient::new(base, "key-1".into()).unwrap();
+        let d = client
+            .set_sync_mode(id(DISCIPLINE), SyncMode::Live)
+            .await
+            .unwrap();
+        assert_eq!(d.sync_mode, SyncMode::Live);
+        let s = seen.lock();
+        assert_eq!(s.path_id.as_deref(), Some(DISCIPLINE));
+        assert_eq!(s.api_key.as_deref(), Some("key-1"));
+        assert_eq!(s.body, Some(json!({"sync_mode": "live"})));
+    }
+
+    #[tokio::test]
+    async fn a3_uploads_runs_and_penalties() {
+        let (base, seen) = mock().await;
+        let client = CloudClient::new(base, "key-1".into()).unwrap();
+        let p = sample_payload();
+        let req = OnPremUploadRequest {
+            runs: vec![OnPremUploadRun::from_run(&p.runs[0])],
+            penalties: p.penalties.clone(),
+            current_run_ids: vec![],
+        };
+        let resp = client.onprem_upload(id(DISCIPLINE), &req).await.unwrap();
+        assert_eq!(resp.runs_updated, 1);
+        assert_eq!(resp.penalties_upserted, 1);
+        let s = seen.lock();
+        assert_eq!(s.api_key.as_deref(), Some("key-1"));
+        let body = s.body.clone().unwrap();
+        assert_eq!(body, serde_json::to_value(&req).unwrap());
+        assert_eq!(body["current_run_ids"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn error_envelope_is_mapped() {
+        let (base, _) = mock().await;
+        let client = CloudClient::new(base, "k".into()).unwrap();
+        let err = client
+            .post_run_result(
+                id(DISCIPLINE),
+                id(DISCIPLINE),
+                &RunResultRequest {
+                    run_number: 1,
+                    status: crate::cloud::types::RunStatus::Completed,
+                    original_time_ms: Some(1),
+                    started_at: None,
+                    ended_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("conflict:"), "{err}");
+        assert!(err.contains("conflict: nope"));
+    }
+
+    #[tokio::test]
+    async fn unreachable_web_is_an_error() {
+        let client = CloudClient::new("http://127.0.0.1:9".into(), "k".into()).unwrap();
+        let err = client
+            .set_sync_mode(id(DISCIPLINE), SyncMode::Live)
+            .await
+            .unwrap_err();
+        assert!(err.contains("request failed"));
+    }
 }

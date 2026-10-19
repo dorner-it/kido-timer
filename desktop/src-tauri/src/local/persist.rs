@@ -8,10 +8,18 @@
 //!   disciplines/<uuid>.json      PersistedDiscipline (one per discipline)
 //! ```
 //!
-//! Every write goes to `<file>.tmp` first and is then renamed over the
-//! target, so a crash mid-write never leaves a truncated file. Files are
-//! kept per discipline: switching to another discipline (or deselecting)
-//! never deletes recorded results.
+//! Every write goes to `<file>.tmp` first (fsync) and is then renamed over
+//! the target, so a crash mid-write never leaves a truncated file. Files
+//! are kept per discipline: switching to another discipline (or
+//! deselecting) never deletes recorded results.
+//!
+//! Format history:
+//! - **1** (0.6.0): `store = { base, run_edits }`.
+//! - **2** (0.7.0, on-prem): `store` additionally holds `run_extras`
+//!   (lineups, hand times), `penalty_edits` (penalties incl. status),
+//!   `current_run_ids`, `onprem_token`, `last_upload_at`; `base` may carry
+//!   `penalties` (A1). Format-1 files load unchanged (all additions
+//!   default to empty) and are written back as format 2 on the next save.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,7 +32,9 @@ use crate::cloud::kido::check_schema_version;
 use crate::cloud::types::{FailedPost, SyncMode};
 
 /// Version of the on-disk format (independent of the wire schema).
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
+/// Older formats this build still reads (migrated on load).
+pub const READABLE_FORMATS: &[u32] = &[1, 2];
 pub const DIR_NAME: &str = "local-store";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,7 +109,7 @@ pub fn load_discipline(root: &Path, id: Uuid) -> Result<Option<PersistedDiscipli
     }
     let probe: Probe = serde_json::from_slice(&bytes)
         .map_err(|e| format!("Lokale Sicherung {} beschädigt: {e}", path.display()))?;
-    if probe.format != FORMAT_VERSION {
+    if !READABLE_FORMATS.contains(&probe.format) {
         return Err(format!(
             "Lokale Sicherung {} hat Format {} (erwartet {FORMAT_VERSION})",
             path.display(),
@@ -108,6 +118,7 @@ pub fn load_discipline(root: &Path, id: Uuid) -> Result<Option<PersistedDiscipli
     }
     let data: PersistedDiscipline = serde_json::from_slice(&bytes)
         .map_err(|e| format!("Lokale Sicherung {} beschädigt: {e}", path.display()))?;
+    let data = migrate(data);
     check_schema_version(data.store.base.schema_version)?;
     if data.store.discipline_id() != id {
         return Err(format!(
@@ -116,6 +127,16 @@ pub fn load_discipline(root: &Path, id: Uuid) -> Result<Option<PersistedDiscipli
         ));
     }
     Ok(Some(data))
+}
+
+/// Bring a loaded file to [`FORMAT_VERSION`]. Format 1 → 2 needs no data
+/// change: every format-2 addition is `#[serde(default)]`, and a base
+/// without `penalties` falls back to `approved_penalties` on parse.
+pub fn migrate(mut data: PersistedDiscipline) -> PersistedDiscipline {
+    if data.format < FORMAT_VERSION {
+        data.format = FORMAT_VERSION;
+    }
+    data
 }
 
 /// Move an unreadable discipline file aside (`<uuid>.broken-<unix>.json`)
@@ -302,6 +323,143 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let err = load_discipline(dir.path(), id(DISCIPLINE)).unwrap_err();
         assert!(err.contains("Format 99"), "{err}");
+    }
+
+    /// A format-1 file exactly as 0.6.0 wrote it (no penalties in the
+    /// base, no on-prem fields).
+    fn format1_json() -> serde_json::Value {
+        let mut base = serde_json::to_value(sample_payload()).unwrap();
+        base.as_object_mut().unwrap().remove("penalties");
+        serde_json::json!({
+            "format": 1,
+            "saved_at": "2027-06-12T10:00:48Z",
+            "effective_mode": "offline",
+            "store": {
+                "base": base,
+                "run_edits": {
+                    RUN_A1: {
+                        "run_number": 1, "status": "completed",
+                        "original_time_ms": 47240,
+                        "started_at": "2027-06-12T10:00:00Z",
+                        "ended_at": "2027-06-12T10:00:47Z",
+                        "recorded_at": "2027-06-12T10:00:48Z"
+                    }
+                }
+            },
+            "failed_posts": []
+        })
+    }
+
+    #[test]
+    fn format1_file_is_migrated_to_format2() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = discipline_file(dir.path(), id(DISCIPLINE));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&format1_json()).unwrap()).unwrap();
+
+        let loaded = load_discipline(dir.path(), id(DISCIPLINE))
+            .unwrap()
+            .expect("format 1 readable");
+        assert_eq!(loaded.format, FORMAT_VERSION);
+        assert_eq!(loaded.effective_mode, SyncMode::Offline);
+        // Recorded result kept.
+        assert_eq!(loaded.store.view().runs[0].original_time_ms, Some(47_240));
+        // New overlays default to empty; penalties fall back to approved.
+        assert!(loaded.store.run_extras.is_empty());
+        assert!(loaded.store.penalty_edits.is_empty());
+        assert!(loaded.store.current_run_ids.is_none());
+        assert!(loaded.store.onprem_token.is_none());
+        assert_eq!(loaded.store.base.penalties.len(), 1);
+        assert_eq!(
+            loaded.store.base.penalties,
+            loaded.store.base.approved_penalties
+        );
+
+        // Next save writes format 2; reload is lossless.
+        save_discipline(dir.path(), &loaded).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["format"], 2);
+        assert!(raw["store"]["base"]["penalties"].is_array());
+        let again = load_discipline(dir.path(), id(DISCIPLINE))
+            .unwrap()
+            .unwrap();
+        assert_eq!(again, loaded);
+    }
+
+    #[test]
+    fn migrate_is_idempotent_and_bumps_format() {
+        let mut data = persisted();
+        data.format = 1;
+        let migrated = migrate(data.clone());
+        assert_eq!(migrated.format, FORMAT_VERSION);
+        assert_eq!(migrate(migrated.clone()), migrated);
+        assert_eq!(migrated.store, data.store);
+    }
+
+    #[test]
+    fn on_prem_overlays_round_trip_through_disk() {
+        use crate::cloud::fixtures::{RUNNER_A1, RUN_B1};
+        use crate::cloud::types::{LineupConfirmedBy, PenaltyStatus};
+        use crate::local::store::{HandTimesEdit, LineupEdit};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut data = persisted();
+        let mut p = data.store.base.penalties[0].clone();
+        p.id = Uuid::new_v4();
+        p.status = PenaltyStatus::Pending;
+        p.reviewed_at = None;
+        p.reviewed_by = None;
+        data.store.upsert_penalty(p.clone());
+        let mut rejected = data.store.base.penalties[0].clone();
+        rejected.status = PenaltyStatus::Rejected;
+        data.store.upsert_penalty(rejected);
+        data.store
+            .set_lineup(
+                id(RUN_B1),
+                LineupEdit {
+                    runner_ids: vec![],
+                    confirmed_at: Some("2027-06-12T10:00:00.000Z".into()),
+                    confirmed_by: Some(LineupConfirmedBy::Organizer),
+                },
+            )
+            .unwrap();
+        data.store
+            .set_lineup(
+                id(RUN_A1),
+                LineupEdit {
+                    runner_ids: vec![id(RUNNER_A1)],
+                    confirmed_at: Some("2027-06-12T10:00:00.000Z".into()),
+                    confirmed_by: Some(LineupConfirmedBy::Startlinie),
+                },
+            )
+            .unwrap();
+        data.store
+            .set_hand_times(
+                id(RUN_A1),
+                HandTimesEdit::Set {
+                    hand_time_1_ms: 47_230,
+                    hand_time_2_ms: 47_245,
+                },
+            )
+            .unwrap();
+        data.store.set_current_runs(vec![id(RUN_B1)]);
+        data.store.onprem_token = Some("0123456789abcdef0123456789abcdef".into());
+        save_discipline(dir.path(), &data).unwrap();
+        set_current(dir.path(), Some(id(DISCIPLINE))).unwrap();
+
+        let restored = restore_current(dir.path()).unwrap().unwrap();
+        assert_eq!(restored, data);
+        let view = restored.store.view();
+        assert_eq!(view.penalties.len(), 2);
+        assert_eq!(view.penalties[0].status, PenaltyStatus::Rejected);
+        assert_eq!(view.runs[0].original_time_ms, Some(47_240));
+        assert_eq!(view.runs[0].lineup, vec![id(RUNNER_A1)]);
+        assert_eq!(view.event.current_run_ids, vec![id(RUN_B1)]);
+        assert_eq!(
+            restored.store.onprem_token.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
     }
 
     #[test]

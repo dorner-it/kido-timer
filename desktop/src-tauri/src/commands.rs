@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
-use crate::cloud::state::RecordOutcome;
+use crate::cloud::state::{RecordOutcome, UploadOutcome};
 use crate::cloud::types::{
-    CloudIdentity, DisciplineListItem, DisciplinePayload, EventSummary, FailedPost, OpenKidoResult,
-    RunDivergence, RunStatus, SyncMode,
+    CloudIdentity, DisciplineListItem, DisciplinePayload, DivergenceState, EventSummary,
+    FailedPost, OpenKidoResult, Penalty, RunStatus, SyncMode,
 };
+use crate::local::organizer;
+use crate::local::server::OnPremStatus;
 use crate::results::{CatalogueItem, ResultsResponse};
 use crate::state::AppState;
 
@@ -115,10 +117,16 @@ pub fn cloud_snapshot(state: State<'_, AppState>) -> Option<DisciplinePayload> {
 }
 
 /// Effective sync mode (web default + desktop override) for the loaded
-/// discipline. `offline` = on-prem.
+/// discipline. `offline` = on-prem (starts the judge server); `live`
+/// switches the web to live first if needed (A2).
 #[tauri::command]
-pub fn cloud_set_sync_mode(app_handle: AppHandle, state: State<'_, AppState>, mode: SyncMode) {
-    state.cloud.set_sync_mode(app_handle, mode);
+pub async fn cloud_set_sync_mode(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    mode: SyncMode,
+) -> Result<(), String> {
+    state.cloud.set_sync_mode(app_handle, mode).await;
+    Ok(())
 }
 
 /// Record a timing change on desktop lane `lane` (1-based = timer
@@ -150,11 +158,11 @@ pub async fn cloud_record_lane_status(
 }
 
 #[tauri::command]
-pub fn cloud_divergences(state: State<'_, AppState>) -> Vec<RunDivergence> {
+pub fn cloud_divergences(state: State<'_, AppState>) -> DivergenceState {
     state.cloud.divergences()
 }
 
-/// `upload = true`: post local results; `false`: discard them.
+/// `upload = true`: upload all local changes (A3); `false`: discard them.
 #[tauri::command]
 pub async fn cloud_resolve_divergence(
     app_handle: AppHandle,
@@ -221,4 +229,109 @@ pub fn compute_results(state: State<'_, AppState>) -> Result<ResultsResponse, St
 #[tauri::command]
 pub fn kido_catalogue() -> Vec<CatalogueItem> {
     crate::results::catalogue()
+}
+
+/// Hand-time mean (1/100 s, half up) — `kido_core::timing::hand_time_mean`.
+#[tauri::command]
+pub fn hand_time_mean(hand_time_1_ms: u32, hand_time_2_ms: u32) -> u32 {
+    kido_core::timing::hand_time_mean(hand_time_1_ms, hand_time_2_ms)
+}
+
+// ─── On-prem (local judge server + organizer) ───────────────────────────────
+
+#[tauri::command]
+pub fn onprem_status(state: State<'_, AppState>) -> OnPremStatus {
+    state.cloud.onprem_status()
+}
+
+/// "Neuer Zugangscode": old phones get 401 and must rescan.
+#[tauri::command]
+pub fn onprem_rotate_token(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<OnPremStatus, String> {
+    state.cloud.rotate_onprem_token(&app_handle)
+}
+
+/// Current runs, one per lane (max `lane_count`).
+#[tauri::command]
+pub fn onprem_set_current_runs(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    run_ids: Vec<Uuid>,
+) -> Result<(), String> {
+    state.cloud.organizer(&app_handle, |store, _, _| {
+        organizer::set_current_runs(store, run_ids)
+    })
+}
+
+/// Bestätigen (`approve = true`) / Zurücknehmen of a pending error.
+#[tauri::command]
+pub fn onprem_review_penalty(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    penalty_id: Uuid,
+    approve: bool,
+) -> Result<Penalty, String> {
+    state.cloud.organizer(&app_handle, |store, by, now| {
+        organizer::review_penalty(store, penalty_id, approve, by, now)
+    })
+}
+
+/// "Übernehmen": remaining pending errors of the run → approved.
+#[tauri::command]
+pub fn onprem_take_over(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    run_id: Uuid,
+) -> Result<usize, String> {
+    state.cloud.organizer(&app_handle, |store, by, now| {
+        organizer::take_over(store, run_id, by, now)
+    })
+}
+
+#[tauri::command]
+pub fn onprem_set_lineup(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    run_id: Uuid,
+    runner_ids: Vec<Uuid>,
+) -> Result<(), String> {
+    state.cloud.organizer(&app_handle, |store, _, now| {
+        organizer::set_lineup(store, run_id, runner_ids, now)
+    })
+}
+
+/// Returns the stored Handzeit (mean).
+#[tauri::command]
+pub fn onprem_set_hand_times(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    run_id: Uuid,
+    hand_time_1_ms: u32,
+    hand_time_2_ms: u32,
+) -> Result<u32, String> {
+    state.cloud.organizer(&app_handle, |store, _, _| {
+        organizer::set_hand_times(store, run_id, hand_time_1_ms, hand_time_2_ms)
+    })
+}
+
+#[tauri::command]
+pub fn onprem_clear_hand_times(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    run_id: Uuid,
+) -> Result<(), String> {
+    state.cloud.organizer(&app_handle, |store, _, _| {
+        organizer::clear_hand_times(store, run_id)
+    })
+}
+
+/// "Ins Web hochladen" (A3).
+#[tauri::command]
+pub async fn cloud_upload_onprem(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<UploadOutcome, String> {
+    state.cloud.upload_onprem(app_handle).await
 }

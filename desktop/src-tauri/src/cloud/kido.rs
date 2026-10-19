@@ -289,4 +289,88 @@ mod tests {
         assert!(check_schema_version(3).is_err());
         assert!(check_schema_version(5).is_err());
     }
+
+    #[test]
+    fn export_contains_all_penalties_and_local_run_fields() {
+        use crate::cloud::fixtures::{id, RUNNER_A1, RUN_A1, RUN_B1};
+        use crate::cloud::types::{PenaltyStatus, StationKind, TimeSource};
+        use crate::local::judge::{
+            set_lineup, submit_penalty, StationLineupInput, SubmitStationPenaltyInput,
+        };
+        use crate::local::organizer;
+        use crate::local::store::LocalStore;
+
+        let mut store = LocalStore::new(sample_payload());
+        let now = "2027-06-12T10:01:00.000Z";
+        let (_, pending) = submit_penalty(
+            &mut store,
+            SubmitStationPenaltyInput {
+                station: StationKind::Knotengestell,
+                run_id: Some(id(RUN_B1)),
+                code: Some("knotengestell.ein_knoten_falsch".into()),
+                client_id: None,
+            },
+            uuid::Uuid::new_v4(),
+            now,
+        )
+        .unwrap();
+        let (_, rejected) = submit_penalty(
+            &mut store,
+            SubmitStationPenaltyInput {
+                station: StationKind::Knotengestell,
+                run_id: Some(id(RUN_B1)),
+                code: Some("knotengestell.mehrere_knoten_falsch".into()),
+                client_id: None,
+            },
+            uuid::Uuid::new_v4(),
+            now,
+        )
+        .unwrap();
+        organizer::review_penalty(&mut store, rejected.id, false, "fbl", now).unwrap();
+        organizer::set_hand_times(&mut store, id(RUN_A1), 47_230, 47_245).unwrap();
+        set_lineup(
+            &mut store,
+            id(RUN_A1),
+            StationLineupInput {
+                runner_ids: vec![id(RUNNER_A1)],
+                station: None,
+            },
+            now,
+        )
+        .unwrap();
+
+        let restamped = restamp_for_export(&store.view(), "sub-1").unwrap();
+        let envelope = build_envelope(&restamped, &key()).unwrap();
+        let decoded = verify_envelope(&envelope, &key(), "sub-1").unwrap();
+
+        let mut statuses: Vec<&str> = decoded
+            .penalties
+            .iter()
+            .map(|p| p.status.as_str())
+            .collect();
+        statuses.sort_unstable();
+        assert_eq!(statuses, vec!["approved", "pending", "rejected"]);
+        assert_eq!(
+            decoded.penalties[0].status,
+            PenaltyStatus::Approved,
+            "base row first"
+        );
+        assert!(decoded.penalties.iter().any(|p| p.id == pending.id));
+        assert_eq!(
+            decoded.approved_penalties.len(),
+            1,
+            "legacy list = approved only"
+        );
+        let run = decoded.runs.iter().find(|r| r.id == id(RUN_A1)).unwrap();
+        assert_eq!(run.time_source, TimeSource::Handstopp);
+        assert_eq!(run.hand_time_1_ms, Some(47_230));
+        assert_eq!(run.original_time_ms, Some(47_240));
+        assert_eq!(run.lineup, vec![id(RUNNER_A1)]);
+        // Raw JSON carries the A1 field.
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(envelope.payload.as_bytes())
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["penalties"].as_array().unwrap().len(), 3);
+    }
 }
