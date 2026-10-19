@@ -4,11 +4,27 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   ApiError,
-  STATION_KIND_LABELS,
   apiClient,
+  type CatalogueEntry,
+  type Run,
+  type Runner,
   type StationKind,
+  type Team,
   type TimerMode,
 } from '../../lib/api';
+import {
+  catalogueEntryLabel,
+  catalogueSubmitBody,
+  currentRunLabel,
+  legacySubmitBody,
+  resolveSubmitTarget,
+} from '../../lib/decider';
+import {
+  PENALTY_KIND_LABELS,
+  PENALTY_KIND_SHORT,
+  catalogueForStation,
+} from '../../lib/penalties';
+import { STATION_KIND_LABELS, pickerStations } from '../../lib/stations';
 import {
   PRESETS_BY_MODE,
   reasonsForMode,
@@ -39,8 +55,10 @@ import StationPicker, {
  *   minted before the stations feature keep working.
  *
  * - **station** — new route `/decider/:owner/:token`. The decider
- *   picks a station once (persisted to localStorage), every penalty
- *   carries the station + an optional DQ flag.
+ *   picks a station once (persisted to localStorage). With the 2027
+ *   backend every penalty is a catalogue code of that station (SZ/FV);
+ *   if no catalogue is available (older backend) the legacy time
+ *   presets + DQ button are shown instead.
  */
 export type DeciderPadProps =
   | {
@@ -66,18 +84,21 @@ interface ConfirmedSubmission {
   at: number;
 }
 
+interface CurrentRunView {
+  run: Run;
+  team: Team;
+  runner?: Runner | null;
+}
+
 interface CommonState {
   event: { id: string; name: string; date: string; location: string | null };
   discipline: { id: string; name: string; mode: TimerMode } | null;
-  current_run:
-    | {
-        run: import('../../lib/api').Run;
-        team: import('../../lib/api').Team;
-        runner: import('../../lib/api').Runner | null;
-      }
-    | null;
+  /** `current_runs[0]`, kept for the single-run UI. */
+  current_run: CurrentRunView | null;
+  /** All current runs (one per active lane), ordered by lane. */
+  current_runs: CurrentRunView[];
   disabled: boolean;
-  /** Only populated in station mode. */
+  /** Only populated in station mode (already normalized + filtered by mode). */
   allowed_stations?: StationKind[];
 }
 
@@ -93,9 +114,38 @@ export default function DeciderPad(props: DeciderPadProps) {
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [station, setStation] = useState<StationKind | null>(null);
+  const [catalogue, setCatalogue] = useState<CatalogueEntry[] | null>(null);
 
   const presets =
     state && state.discipline ? PRESETS_BY_MODE[state.discipline.mode] : [];
+
+  // Station mode: load the static error catalogue once. On failure
+  // (older backend without /api/catalogue) we keep `[]` and fall back
+  // to the legacy time presets.
+  useEffect(() => {
+    if (!isStation) return;
+    let cancelled = false;
+    apiClient.catalogue
+      .list()
+      .then((c) => {
+        if (!cancelled) setCatalogue(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogue([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isStation]);
+
+  const stationEntries = useMemo(
+    () => catalogueForStation(catalogue, station),
+    [catalogue, station],
+  );
+  // TODO(PR 2): full catalogue UI (grouping, confirmation, lineup at
+  // Startlinie). For now a plain button per catalogue entry.
+  const useCatalogue = isStation && stationEntries.length > 0;
+  const submitTarget = resolveSubmitTarget(state?.current_runs ?? []);
 
   // Hydrate the persisted station selection on first render (and any
   // time the event id changes — moving between events on the same
@@ -148,9 +198,10 @@ export default function DeciderPad(props: DeciderPadProps) {
         setState({
           event: r.event,
           discipline: r.discipline,
-          current_run: r.current_run,
+          current_run: r.current_runs[0] ?? null,
+          current_runs: r.current_runs,
           disabled: r.disabled,
-          allowed_stations: r.allowed_stations,
+          allowed_stations: pickerStations(r.allowed_stations, r.discipline?.mode),
         });
       } else {
         const slot = Number((props as { slotIndex: string }).slotIndex);
@@ -163,6 +214,7 @@ export default function DeciderPad(props: DeciderPadProps) {
           event: r.event,
           discipline: r.discipline,
           current_run: r.current_run,
+          current_runs: r.current_run ? [r.current_run] : [],
           disabled: r.disabled,
         });
       }
@@ -190,11 +242,14 @@ export default function DeciderPad(props: DeciderPadProps) {
     label: string,
     deltaMs: number,
     reason: string | null,
-    opts: { dq?: boolean } = {},
+    opts: { dq?: boolean; code?: string } = {},
   ) => {
     if (busy) return;
-    if (!state?.current_run) {
-      setError('Aktuell läuft kein Lauf.');
+    // TODO(PR 2 – Bahnauswahl): pass the judge's selected run here once
+    // multiple parallel runs can be targeted (see resolveSubmitTarget).
+    const target = resolveSubmitTarget(state?.current_runs ?? []);
+    if (!target.ok) {
+      setError(target.message);
       return;
     }
     if (isStation && !station) {
@@ -217,22 +272,14 @@ export default function DeciderPad(props: DeciderPadProps) {
         // and posts directly. Offline retry is best-effort: if this
         // throws, the operator re-taps after reconnection.
         try {
-          const body: {
-            station: StationKind;
-            client_id: string;
-            delta_ms?: number;
-            is_disqualification?: boolean;
-            reason_code?: string | null;
-          } = {
-            station: station!,
-            client_id: cid,
-            reason_code: reason,
-          };
-          if (opts.dq) {
-            body.is_disqualification = true;
-          } else {
-            body.delta_ms = deltaMs;
-          }
+          const body = opts.code
+            ? catalogueSubmitBody(station!, { code: opts.code }, target.run_id, cid)
+            : legacySubmitBody(
+                station!,
+                { deltaMs, reasonCode: reason, dq: opts.dq },
+                target.run_id,
+                cid,
+              );
           const created = await apiClient.deciderStation.submit(
             ownerSub,
             (props as { stationToken: string }).stationToken,
@@ -424,6 +471,10 @@ export default function DeciderPad(props: DeciderPadProps) {
               übernommen.
             </p>
           </div>
+        ) : state && state.current_runs.length > 1 ? (
+          // TODO(PR 2 – Bahnauswahl): make these cards selectable (or
+          // filter to the judge's own lane for per_station_and_lane).
+          <MultiRunBanner runs={state.current_runs} />
         ) : state?.current_run ? (
           <CurrentRunBanner
             teamName={state.current_run.team.name}
@@ -445,7 +496,28 @@ export default function DeciderPad(props: DeciderPadProps) {
           </div>
         )}
 
-        {state && !state.disabled && (
+        {state && !state.disabled && useCatalogue && (
+          <section className="mt-8">
+            <span className="label">Fehler melden · {station ? STATION_KIND_LABELS[station] : ''}</span>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 stagger-rise">
+              {stationEntries.map((entry) => (
+                <CatalogueButton
+                  key={entry.code}
+                  entry={entry}
+                  disabled={!submitTarget.ok || busy}
+                  flashing={flashKey === entry.code}
+                  onClick={() =>
+                    submit(entry.code, catalogueEntryLabel(entry), 0, null, {
+                      code: entry.code,
+                    })
+                  }
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {state && !state.disabled && !useCatalogue && (
           <section className="mt-8">
             <span className="label">Strafen senden</span>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 stagger-rise">
@@ -453,7 +525,7 @@ export default function DeciderPad(props: DeciderPadProps) {
                 <PresetButton
                   key={p.reason_code}
                   preset={p}
-                  disabled={!state?.current_run || busy}
+                  disabled={!submitTarget.ok || busy}
                   flashing={flashKey === p.reason_code}
                   onClick={() =>
                     submit(p.reason_code, p.reason_label, p.delta_ms, p.reason_code)
@@ -462,7 +534,7 @@ export default function DeciderPad(props: DeciderPadProps) {
               ))}
               <button
                 type="button"
-                disabled={!state?.current_run || busy}
+                disabled={!submitTarget.ok || busy}
                 onClick={() => setCustomOpen((v) => !v)}
                 className={`surface group relative flex flex-col items-center justify-center gap-1 py-7 transition active:scale-[0.97] disabled:opacity-40 border-dashed ${
                   customOpen ? 'ring-2 ring-signal/60' : ''
@@ -483,7 +555,7 @@ export default function DeciderPad(props: DeciderPadProps) {
               <div className="mt-4 flex justify-center">
                 <button
                   type="button"
-                  disabled={!state.current_run || busy || !station}
+                  disabled={!submitTarget.ok || busy || !station}
                   onClick={() =>
                     submit('dq', 'Disqualifikation', 0, 'dsq', { dq: true })
                   }
@@ -497,7 +569,7 @@ export default function DeciderPad(props: DeciderPadProps) {
             {customOpen && state.discipline && (
               <CustomPenaltyForm
                 mode={state.discipline.mode}
-                disabled={!state?.current_run || busy}
+                disabled={!submitTarget.ok || busy}
                 flashing={flashKey === 'custom'}
                 onSubmit={async (seconds, reasonCode) => {
                   await submit(
@@ -612,6 +684,85 @@ function CurrentRunBanner(props: {
       </div>
       <div className="scanlines pointer-events-none absolute inset-0 opacity-50" />
     </div>
+  );
+}
+
+/** Parallel runs (one per lane). Display only for now. */
+function MultiRunBanner({ runs }: { runs: CurrentRunView[] }) {
+  return (
+    <div className="surface relative overflow-hidden p-5 animate-rise">
+      <span className="label">{runs.length} Läufe gleichzeitig</span>
+      <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {runs.map((cr) => (
+          <li
+            key={cr.run.id}
+            className="flex items-center gap-3 rounded border border-[color:var(--hairline-color)] px-4 py-3"
+          >
+            <span className="font-stencil text-[32px] font-bold leading-none text-signal-glow tnum">
+              {cr.run.lane ?? '–'}
+            </span>
+            <div className="flex flex-col">
+              <span className="label">
+                {cr.run.lane != null ? `Bahn ${cr.run.lane}` : 'Ohne Bahn'} · Lauf{' '}
+                {cr.run.run_number}
+              </span>
+              <span className="font-display text-[18px] font-semibold leading-tight text-ink-50">
+                {cr.team.name}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 font-mono text-[11px] text-status-armed">
+        {runs.map(currentRunLabel).join(' / ')} — Fehler können erst gemeldet
+        werden, wenn nur ein Lauf aktiv ist (Bahnauswahl folgt).
+      </p>
+    </div>
+  );
+}
+
+function CatalogueButton({
+  entry,
+  disabled,
+  flashing,
+  onClick,
+}: {
+  entry: CatalogueEntry;
+  disabled: boolean;
+  flashing: boolean;
+  onClick: () => void;
+}) {
+  const kindCls =
+    entry.kind === 'fv'
+      ? 'border-status-unknown/60 bg-status-unknown/10 hover:bg-status-unknown/20'
+      : '';
+  const flashCls = flashing
+    ? 'ring-2 ring-status-confirmed bg-status-confirmed/15 scale-[0.98]'
+    : '';
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={PENALTY_KIND_LABELS[entry.kind]}
+      className={`surface flex items-center gap-3 px-4 py-4 text-left transition active:scale-[0.97] disabled:opacity-40 ${kindCls} ${flashCls}`}
+    >
+      <span
+        className={`pill shrink-0 ${
+          entry.kind === 'fv'
+            ? 'bg-status-unknown/15 text-status-unknown'
+            : 'bg-status-armed/15 text-status-armed'
+        }`}
+      >
+        {PENALTY_KIND_SHORT[entry.kind]}
+        <span className="font-mono text-[10px] opacity-80">
+          {entry.kind === 'sz' ? '+15 s' : 'ungültig'}
+        </span>
+      </span>
+      <span className="font-display text-[14px] leading-snug text-ink-50">
+        {entry.label_de}
+      </span>
+    </button>
   );
 }
 

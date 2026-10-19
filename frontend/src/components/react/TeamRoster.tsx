@@ -4,9 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import {
   apiClient,
-  GENDER_LABELS,
   type EventDetail as EventDetailData,
-  type Gender,
   type Runner,
   type Team,
 } from '../../lib/api';
@@ -118,11 +116,10 @@ export default function TeamRoster({ data, onChange }: Props) {
         </p>
       ) : (
         <div className="surface overflow-hidden">
-          <div className="grid grid-cols-[2.4fr_2fr_2fr_1.3fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[11px]">
+          <div className="grid grid-cols-[2.4fr_2fr_2fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[11px]">
             <HeaderCell>Mannschaft / Vorname</HeaderCell>
             <HeaderCell>Nachname</HeaderCell>
             <HeaderCell>Geburtsdatum</HeaderCell>
-            <HeaderCell>Geschlecht</HeaderCell>
             <HeaderCell>Position</HeaderCell>
             <HeaderCell> </HeaderCell>
             <HeaderCell> </HeaderCell>
@@ -163,12 +160,7 @@ function TeamBlock({
 }) {
   const [open, setOpen] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState<{
-    first_name: string;
-    last_name: string;
-    birth_date: string;
-    gender: Gender | '';
-  }>({ first_name: '', last_name: '', birth_date: '', gender: '' });
+  const [draft, setDraft] = useState<RunnerDraft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const firstNameRef = useRef<HTMLInputElement | null>(null);
@@ -205,7 +197,7 @@ function TeamBlock({
   };
 
   const startAdding = () => {
-    setDraft({ first_name: '', last_name: '', birth_date: '', gender: '' });
+    setDraft(EMPTY_DRAFT);
     setErr(null);
     setAdding(true);
     // Focus is taken care of by NewRunnerRow's useLayoutEffect on
@@ -214,7 +206,7 @@ function TeamBlock({
 
   const cancelAdding = () => {
     setAdding(false);
-    setDraft({ first_name: '', last_name: '', birth_date: '', gender: '' });
+    setDraft(EMPTY_DRAFT);
     setErr(null);
   };
 
@@ -233,8 +225,6 @@ function TeamBlock({
       return false;
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d.birth_date)) return false;
-    // Gender is required by the backend so the WG derivation works.
-    if (d.gender !== 'male' && d.gender !== 'female') return false;
     setSaving(true);
     setErr(null);
     try {
@@ -243,7 +233,6 @@ function TeamBlock({
         last_name: d.last_name.trim(),
         birth_date: d.birth_date,
         position: nextPosition,
-        gender: d.gender,
       });
       // Keep the row open for chained entry. The data refetch from
       // onChange() bumps runners.length, which changes the `key` on
@@ -251,7 +240,7 @@ function TeamBlock({
       // instance. The new instance's useLayoutEffect then focuses
       // Vorname synchronously during commit, which the old setTimeout
       // approach couldn't guarantee.
-      setDraft({ first_name: '', last_name: '', birth_date: '', gender: '' });
+      setDraft(EMPTY_DRAFT);
       onChange();
       return true;
     } catch (e) {
@@ -265,7 +254,7 @@ function TeamBlock({
   return (
     <div className="border-t border-[color:var(--hairline-color)] bg-[color:var(--c-ink-800)]/40">
       {/* Team header row */}
-      <div className="grid grid-cols-[2.4fr_2fr_2fr_1.3fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px]">
+      <div className="grid grid-cols-[2.4fr_2fr_2fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px]">
         <div className="flex items-center gap-2 bg-[color:var(--c-ink-700)] px-3 py-2">
           <button
             type="button"
@@ -282,7 +271,7 @@ function TeamBlock({
             ariaLabel="Mannschafts-Name"
           />
         </div>
-        <div className="bg-[color:var(--c-ink-700)] px-3 py-2 col-span-4 font-mono text-[11px] text-ink-200">
+        <div className="bg-[color:var(--c-ink-700)] px-3 py-2 col-span-3 font-mono text-[11px] text-ink-200">
           {runners.length} Läufer
         </div>
         <div className="bg-[color:var(--c-ink-700)] px-3 py-2 text-right">
@@ -356,11 +345,8 @@ function RunnerRow({
         last_name: patch.last_name ?? runner.last_name,
         birth_date: patch.birth_date ?? runner.birth_date,
         position: patch.position ?? runner.position,
-        // `patch.gender === null` means the caller explicitly cleared
-        // it; otherwise fall back to the stored value (which may itself
-        // be `null` for pre-migration runners — the backend tolerates
-        // that on PUT).
-        gender: patch.gender !== undefined ? patch.gender : runner.gender,
+        // `gender` is no longer sent (2027); legacy values stay
+        // untouched on the server.
       });
       onChange();
     } finally {
@@ -380,7 +366,7 @@ function RunnerRow({
   };
 
   return (
-    <div className="grid grid-cols-[2.4fr_2fr_2fr_1.3fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px]">
+    <div className="grid grid-cols-[2.4fr_2fr_2fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px]">
       <CellInput
         value={runner.first_name}
         onChange={(v) => {
@@ -399,13 +385,6 @@ function RunnerRow({
         value={runner.birth_date}
         onCommit={(v) => {
           if (v && v !== runner.birth_date) void update({ birth_date: v });
-        }}
-        disabled={busy}
-      />
-      <GenderCell
-        value={runner.gender}
-        onChange={(g) => {
-          if (g !== runner.gender) void update({ gender: g });
         }}
         disabled={busy}
       />
@@ -439,8 +418,9 @@ type RunnerDraft = {
   first_name: string;
   last_name: string;
   birth_date: string;
-  gender: Gender | '';
 };
+
+const EMPTY_DRAFT: RunnerDraft = { first_name: '', last_name: '', birth_date: '' };
 
 function NewRunnerRow({
   draft,
@@ -481,7 +461,7 @@ function NewRunnerRow({
   };
 
   return (
-    <div className="grid grid-cols-[2.4fr_2fr_2fr_1.3fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px] animate-rise">
+    <div className="grid grid-cols-[2.4fr_2fr_2fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px] animate-rise">
       <input
         ref={firstNameRef}
         type="text"
@@ -505,31 +485,10 @@ function NewRunnerRow({
         value={draft.birth_date}
         onChange={(v) => setDraft({ ...draft, birth_date: v })}
         onComplete={(built) => {
-          // Birth date is complete; only auto-commit if gender is
-          // already chosen. Otherwise wait for the GenderRadio to
-          // trigger a commit so we don't 400 on a missing field.
-          if (draft.gender === 'male' || draft.gender === 'female') {
-            void onCommit({ birth_date: built });
-          } else {
-            setDraft({ ...draft, birth_date: built });
-          }
+          // Birth date is the last field: commit right away.
+          void onCommit({ birth_date: built });
         }}
         onEscape={onCancel}
-        disabled={saving}
-      />
-      <GenderRadio
-        value={draft.gender}
-        onChange={(g) => {
-          setDraft({ ...draft, gender: g });
-          // Auto-commit once gender is the last missing field.
-          if (
-            draft.first_name.trim() &&
-            draft.last_name.trim() &&
-            /^\d{4}-\d{2}-\d{2}$/.test(draft.birth_date)
-          ) {
-            void onCommit({ gender: g });
-          }
-        }}
         disabled={saving}
       />
       <div className="bg-[color:var(--c-ink-700)] px-3 py-2 font-mono text-[11px] text-ink-300">
@@ -550,62 +509,6 @@ function NewRunnerRow({
   );
 }
 
-/** Compact m/w radio pair for the spreadsheet cell. Deutsche labels. */
-function GenderRadio({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: Gender | '';
-  onChange: (g: Gender) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Geschlecht"
-      className="flex items-center justify-center gap-2 bg-[color:var(--c-ink-700)] px-2 py-2 font-mono text-[12px] text-ink-50"
-    >
-      {(['male', 'female'] as const).map((g) => (
-        <label
-          key={g}
-          className={[
-            'flex cursor-pointer items-center gap-1 rounded px-2 py-0.5 transition',
-            value === g
-              ? 'bg-signal/20 text-signal-glow ring-1 ring-signal/50'
-              : 'text-ink-200 hover:bg-[color:var(--c-ink-600)]',
-            disabled ? 'opacity-50 cursor-not-allowed' : '',
-          ].join(' ')}
-        >
-          <input
-            type="radio"
-            name={`gender-${Math.random()}`}
-            checked={value === g}
-            onChange={() => onChange(g)}
-            disabled={disabled}
-            className="sr-only"
-          />
-          <span>{GENDER_LABELS[g]}</span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-/** Read-write gender cell for existing runners. Falls back to a "—"
- *  hint when the row is from before the migration (gender is null). */
-function GenderCell({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: Gender | null;
-  onChange: (g: Gender) => void;
-  disabled?: boolean;
-}) {
-  return <GenderRadio value={value ?? ''} onChange={onChange} disabled={disabled} />;
-}
-
 function AddRunnerButtonRow({
   onClick,
   nextPosition,
@@ -617,10 +520,10 @@ function AddRunnerButtonRow({
     <button
       type="button"
       onClick={onClick}
-      className="grid w-full grid-cols-[2.4fr_2fr_2fr_1.3fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px] text-left cursor-pointer group"
+      className="grid w-full grid-cols-[2.4fr_2fr_2fr_1.2fr_0.8fr_2.5rem] gap-px bg-[color:var(--hairline-color)] text-[13px] text-left cursor-pointer group"
       aria-label="Läufer hinzufügen"
     >
-      <div className="col-span-4 flex items-center gap-2 bg-[color:var(--c-ink-800)]/40 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-300 transition group-hover:bg-[color:var(--soft-fill)] group-hover:text-signal-glow">
+      <div className="col-span-3 flex items-center gap-2 bg-[color:var(--c-ink-800)]/40 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-300 transition group-hover:bg-[color:var(--soft-fill)] group-hover:text-signal-glow">
         <span className="text-signal-glow text-[15px] leading-none">+</span>
         Läufer hinzufügen
       </div>

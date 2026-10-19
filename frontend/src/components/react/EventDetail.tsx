@@ -6,11 +6,23 @@ import {
   TIMER_MODE_LABELS,
   apiClient,
   type Discipline,
+  type DisciplineSaveResponse,
   type EventDetail as EventDetailData,
+  type JudgeMode,
   type SyncMode,
   type TimerMode,
 } from '../../lib/api';
 import { formatDateDE } from '../../lib/format';
+import {
+  JUDGE_MODES,
+  JUDGE_MODE_LABELS,
+  allowedLaneCounts,
+  defaultLaneCount,
+  effectiveLaneCount,
+  isLaneCountEditable,
+  laneCountLabel,
+} from '../../lib/lanes';
+import { disciplineFormSchema, fieldErrors } from '../../lib/schemas';
 import TeamRoster from './TeamRoster';
 import PenaltiesPanel from './PenaltiesPanel';
 import EntriesPanel from './EntriesPanel';
@@ -176,8 +188,23 @@ function DisciplinesPanel({
   data: EventDetailData;
   onChange: () => void;
 }) {
-  const { event, disciplines } = data;
+  const { event, disciplines, teams } = data;
   const [creating, setCreating] = useState(false);
+  const [conflictWarning, setConflictWarning] = useState<string | null>(null);
+
+  const showConflicts = (saved: DisciplineSaveResponse) => {
+    const ids = saved.lane_conflicts ?? [];
+    if (ids.length === 0) {
+      setConflictWarning(null);
+      return;
+    }
+    const names = ids.map((id) => teams.find((t) => t.id === id)?.name ?? id);
+    setConflictWarning(
+      `„${saved.name}" hat jetzt ${laneCountLabel(saved.lane_count)}. Folgende Meldungen ` +
+        `liegen auf einer höheren Bahn und sollten unter „Meldungen" angepasst werden: ` +
+        names.join(', '),
+    );
+  };
 
   const sorted = [...disciplines].sort((a, b) => a.position - b.position);
 
@@ -186,7 +213,8 @@ function DisciplinesPanel({
       <div className="flex items-center justify-between">
         <p className="font-mono text-[12px] text-ink-200">
           Lege pro Wettkampf eine Disziplin an (Löschangriff oder Gruppenstaffette).
-          Jeder Wettkampf hat seinen eigenen Modus (Bahnenzahl) und Live/Offline-Status.
+          Jeder Wettkampf hat seinen eigenen Modus, seine Bahnenzahl, die
+          Wertungsrichter-Einteilung und den Live/Offline-Status.
         </p>
         <button
           type="button"
@@ -197,12 +225,30 @@ function DisciplinesPanel({
         </button>
       </div>
 
+      {conflictWarning && (
+        <div
+          className="surface flex items-start justify-between gap-3 px-5 py-3 text-[13px] text-status-armed"
+          role="alert"
+        >
+          <span>⚠ {conflictWarning}</span>
+          <button
+            type="button"
+            className="text-ink-300 hover:text-ink-50"
+            aria-label="Hinweis schließen"
+            onClick={() => setConflictWarning(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {creating && (
         <DisciplineForm
           eventId={event.id}
           nextPosition={(sorted[sorted.length - 1]?.position ?? 0) + 1}
-          onDone={() => {
+          onDone={(saved) => {
             setCreating(false);
+            showConflicts(saved);
             void onChange();
           }}
         />
@@ -236,6 +282,10 @@ function DisciplinesPanel({
                   await apiClient.disciplines.remove(event.id, d.id);
                   onChange();
                 }}
+                onSaved={(saved) => {
+                  showConflicts(saved);
+                  onChange();
+                }}
               />
             </li>
           ))}
@@ -252,6 +302,7 @@ function DisciplineCard({
   onSetCurrent,
   onSetSyncMode,
   onRemove,
+  onSaved,
 }: {
   event_id: string;
   discipline: Discipline;
@@ -259,8 +310,11 @@ function DisciplineCard({
   onSetCurrent: () => Promise<void>;
   onSetSyncMode: (mode: SyncMode) => Promise<void>;
   onRemove: () => Promise<void>;
+  onSaved: (saved: DisciplineSaveResponse) => void;
 }) {
   const [exporting, setExporting] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const laneCount = effectiveLaneCount(discipline);
 
   const exportFile = async () => {
     setExporting(true);
@@ -290,11 +344,27 @@ function DisciplineCard({
           <h3 className="font-display text-[18px] font-semibold text-ink-50">
             {discipline.name}
           </h3>
+          <span className="font-mono text-[11px] text-ink-200">
+            {laneCountLabel(laneCount)} · {JUDGE_MODE_LABELS[discipline.judge_mode ?? 'per_station']}
+          </span>
         </div>
         {isCurrent && (
           <span className="pill bg-signal/15 text-signal-glow">Auf der Bahn</span>
         )}
       </div>
+
+      {editing && (
+        <DisciplineForm
+          eventId={event_id}
+          existing={discipline}
+          nextPosition={discipline.position}
+          onDone={(saved) => {
+            setEditing(false);
+            onSaved(saved);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -321,6 +391,9 @@ function DisciplineCard({
         >
           {exporting ? '⏳' : '⇩'} .kido
         </button>
+        <button type="button" className="btn" onClick={() => setEditing((v) => !v)}>
+          {editing ? 'Schließen' : 'Bearbeiten'}
+        </button>
         <button type="button" className="btn btn-danger ml-auto" onClick={onRemove}>
           Löschen
         </button>
@@ -334,29 +407,57 @@ const TIMER_MODES: TimerMode[] = ['gruppenstaffette', 'loeschangriff'];
 function DisciplineForm({
   eventId,
   nextPosition,
+  existing,
   onDone,
+  onCancel,
 }: {
   eventId: string;
   nextPosition: number;
-  onDone: () => void;
+  /** Set → edit mode (PUT), otherwise create (POST). */
+  existing?: Discipline;
+  onDone: (saved: DisciplineSaveResponse) => void;
+  onCancel?: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [mode, setMode] = useState<TimerMode>('loeschangriff');
+  const [name, setName] = useState(existing?.name ?? '');
+  const [mode, setMode] = useState<TimerMode>(existing?.mode ?? 'loeschangriff');
+  const [laneCount, setLaneCount] = useState<number>(
+    existing ? effectiveLaneCount(existing) : defaultLaneCount('loeschangriff'),
+  );
+  const [judgeMode, setJudgeMode] = useState<JudgeMode>(
+    existing?.judge_mode ?? 'per_station',
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const idp = existing ? `d-${existing.id}` : 'd-new';
+
+  const changeMode = (m: TimerMode) => {
+    setMode(m);
+    // Keep the lane count if still valid for the new mode, else default.
+    if (!allowedLaneCounts(m).includes(laneCount)) setLaneCount(defaultLaneCount(m));
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const parsed = disciplineFormSchema.safeParse({
+      name,
+      mode,
+      position: nextPosition,
+      lane_count: laneCount,
+      judge_mode: judgeMode,
+    });
+    if (!parsed.success) {
+      setErrors(fieldErrors(parsed.error));
+      return;
+    }
+    setErrors({});
     setBusy(true);
     setErr(null);
     try {
-      await apiClient.disciplines.create(eventId, {
-        name: name.trim(),
-        mode,
-        position: nextPosition,
-      });
-      onDone();
+      const saved = existing
+        ? await apiClient.disciplines.update(eventId, existing.id, parsed.data)
+        : await apiClient.disciplines.create(eventId, parsed.data);
+      onDone(saved);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Fehler');
     } finally {
@@ -364,33 +465,36 @@ function DisciplineForm({
     }
   };
 
+  const laneChoices = allowedLaneCounts(mode);
+
   return (
     <form
       onSubmit={submit}
       className="surface grid grid-cols-1 gap-4 p-5 md:grid-cols-3 animate-rise"
     >
       <div className="field md:col-span-2">
-        <label className="label" htmlFor="d-name">
+        <label className="label" htmlFor={`${idp}-name`}>
           Name
         </label>
         <input
-          id="d-name"
+          id={`${idp}-name`}
           className="input"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="z.B. Löschangriff Männer, Gruppenstaffette Jugend"
           autoFocus
         />
+        {errors.name && <p className="text-[12px] text-status-unknown">{errors.name}</p>}
       </div>
       <div className="field">
-        <label className="label" htmlFor="d-mode">
+        <label className="label" htmlFor={`${idp}-mode`}>
           Timer-Modus
         </label>
         <select
-          id="d-mode"
+          id={`${idp}-mode`}
           className="input"
           value={mode}
-          onChange={(e) => setMode(e.target.value as TimerMode)}
+          onChange={(e) => changeMode(e.target.value as TimerMode)}
         >
           {TIMER_MODES.map((m) => (
             <option key={m} value={m}>
@@ -399,12 +503,56 @@ function DisciplineForm({
           ))}
         </select>
       </div>
+      <div className="field">
+        <label className="label" htmlFor={`${idp}-lanes`}>
+          Bahnen
+        </label>
+        <select
+          id={`${idp}-lanes`}
+          className="input"
+          value={String(laneCount)}
+          disabled={!isLaneCountEditable(mode)}
+          title={isLaneCountEditable(mode) ? undefined : 'Löschangriff hat immer 4 Bahnen.'}
+          onChange={(e) => setLaneCount(parseInt(e.target.value, 10))}
+        >
+          {laneChoices.map((n) => (
+            <option key={n} value={String(n)}>
+              {laneCountLabel(n)}
+            </option>
+          ))}
+        </select>
+        {errors.lane_count && (
+          <p className="text-[12px] text-status-unknown">{errors.lane_count}</p>
+        )}
+      </div>
+      <div className="field md:col-span-2">
+        <label className="label" htmlFor={`${idp}-judges`}>
+          Wertungsrichter
+        </label>
+        <select
+          id={`${idp}-judges`}
+          className="input"
+          value={judgeMode}
+          onChange={(e) => setJudgeMode(e.target.value as JudgeMode)}
+        >
+          {JUDGE_MODES.map((j) => (
+            <option key={j} value={j}>
+              {JUDGE_MODE_LABELS[j]}
+            </option>
+          ))}
+        </select>
+      </div>
       {err && (
         <p className="md:col-span-3 text-[12px] text-status-unknown">{err}</p>
       )}
-      <div className="md:col-span-3 flex justify-end">
+      <div className="md:col-span-3 flex justify-end gap-2">
+        {onCancel && (
+          <button type="button" className="btn" onClick={onCancel}>
+            Abbrechen
+          </button>
+        )}
         <button type="submit" className="btn btn-primary" disabled={busy}>
-          {busy ? 'Speichere …' : 'Wettkampf anlegen'}
+          {busy ? 'Speichere …' : existing ? 'Speichern' : 'Wettkampf anlegen'}
         </button>
       </div>
     </form>
