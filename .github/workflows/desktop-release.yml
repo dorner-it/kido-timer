@@ -44,7 +44,9 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            desktop/package-lock.json
+            frontend/package-lock.json
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -75,6 +77,16 @@ jobs:
             patchelf \
             file \
             rpm
+
+      # On-prem: the judge UI (frontend, static Vite build) is embedded
+      # into the desktop binary at compile time (src-tauri/build.rs).
+      - name: Build judge UI (frontend/dist-judge)
+        working-directory: frontend
+        shell: bash
+        run: |
+          npm ci
+          npm run build:judge
+          test -f dist-judge/index.html
 
       - name: Install frontend dependencies
         working-directory: desktop
