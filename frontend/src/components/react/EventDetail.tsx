@@ -391,6 +391,9 @@ function DisciplineCard({
         >
           {exporting ? '⏳' : '⇩'} .kido
         </button>
+        <a className="btn" href={`/events/${event_id}/disciplines/${discipline.id}/results`}>
+          Ergebnisse
+        </a>
         <button type="button" className="btn" onClick={() => setEditing((v) => !v)}>
           {editing ? 'Schließen' : 'Bearbeiten'}
         </button>

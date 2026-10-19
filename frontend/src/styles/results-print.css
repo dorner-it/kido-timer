@@ -1,0 +1,182 @@
+/* SPDX-License-Identifier: LicenseRef-Proprietary-DornerIT */
+
+/*
+ * Results print layout (A4 portrait). The screen view is `print:hidden`,
+ * the print tree (`.results-print`) is `hidden print:block`.
+ *
+ * - One WG per page, Tagessieger on its own page (`break-before`).
+ * - Each page is a layout table: `thead` (event header) and `tfoot`
+ *   ("Stand: …") repeat if a WG spans several pages.
+ * - System fonts only; no web fonts, no shadows, no backgrounds.
+ */
+
+.results-table .results-group-start td {
+  border-top-width: 2px;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 12mm 14mm 12mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body::before,
+  [data-topbar-slot],
+  .no-print {
+    display: none !important;
+  }
+
+  .results-print {
+    font-family: Arial, 'Helvetica Neue', Helvetica, 'Liberation Sans', sans-serif;
+    font-size: 10pt;
+    line-height: 1.3;
+    color: #000;
+  }
+
+  .results-print * {
+    font-family: inherit !important;
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+  }
+
+  .results-print-page {
+    width: 100%;
+    border-collapse: collapse;
+    break-before: page;
+    page-break-before: always;
+  }
+
+  .results-print-page:first-child {
+    break-before: auto;
+    page-break-before: auto;
+  }
+
+  .results-print-page > thead {
+    display: table-header-group;
+  }
+
+  .results-print-page > tfoot {
+    display: table-footer-group;
+  }
+
+  .results-print-page > thead > tr > td,
+  .results-print-page > tfoot > tr > td,
+  .results-print-page > tbody > tr > td {
+    padding: 0;
+    border: 0;
+    vertical-align: top;
+  }
+
+  .results-print-header {
+    border-bottom: 1.5pt solid #000;
+    padding-bottom: 2.5mm;
+    margin-bottom: 4mm;
+  }
+
+  .results-print-event {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6mm;
+    font-size: 11pt;
+  }
+
+  .results-print-event strong {
+    font-size: 14pt;
+    font-weight: 700;
+  }
+
+  .results-print-discipline {
+    margin-top: 1mm;
+    font-size: 11pt;
+  }
+
+  .results-print-provisional {
+    margin-left: 3mm;
+    padding: 0.3mm 1.5mm;
+    border: 1pt solid #000;
+    font-size: 9pt;
+    font-weight: 700;
+    text-transform: uppercase !important;
+  }
+
+  .results-print-title {
+    margin: 2mm 0 0;
+    font-size: 16pt;
+    font-weight: 700;
+  }
+
+  .results-print-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 6mm;
+    margin-top: 5mm;
+    padding-top: 1.5mm;
+    border-top: 0.5pt solid #000;
+    font-size: 8pt;
+  }
+
+  .results-print-note {
+    margin-top: 4mm;
+    font-size: 8.5pt;
+  }
+
+  .results-print .results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10pt;
+  }
+
+  .results-print .results-table thead {
+    display: table-header-group;
+  }
+
+  .results-print .results-table th {
+    padding: 1.2mm 1.5mm;
+    border-bottom: 1pt solid #000;
+    font-size: 8.5pt;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .results-print .results-table td {
+    padding: 1.4mm 1.5mm;
+    border-top: 0 !important;
+    border-bottom: 0.5pt solid #999;
+  }
+
+  .results-print .results-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .results-print .results-table .results-group-start td {
+    border-top: 1pt solid #000 !important;
+  }
+
+  .results-print .results-hand {
+    border: 0.75pt solid #000 !important;
+    padding: 0 0.6mm;
+    font-size: 7pt;
+  }
+
+  .results-print .results-fallback {
+    border: 0.75pt solid #000 !important;
+    padding: 0 1mm;
+    font-size: 7.5pt;
+  }
+
+  .results-print .results-sz {
+    font-size: 8pt;
+  }
+}
