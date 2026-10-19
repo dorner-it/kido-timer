@@ -2,6 +2,8 @@
 
 import { useEffect, useId, type ReactNode } from 'react';
 
+import { toBody } from './portal';
+
 interface ModalProps {
   title: string;
   onClose: () => void;
@@ -12,7 +14,10 @@ interface ModalProps {
   layer?: string;
 }
 
-/** Minimal accessible modal (Escape / backdrop closes). */
+/**
+ * Minimal accessible modal (Escape / backdrop closes). Rendered into
+ * `document.body` ({@link toBody}) so it always covers the whole page.
+ */
 export function Modal({ title, onClose, children, footer, tone = 'default', layer = 'z-40' }: ModalProps) {
   const titleId = useId();
   useEffect(() => {
@@ -23,7 +28,7 @@ export function Modal({ title, onClose, children, footer, tone = 'default', laye
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  return (
+  return toBody(
     <div
       className={`fixed inset-0 ${layer} flex items-center justify-center bg-ink-50/40 p-4`}
       onMouseDown={(e) => {

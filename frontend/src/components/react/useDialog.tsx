@@ -24,7 +24,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 
 import {
   createDialogController,
@@ -33,6 +32,7 @@ import {
   type DialogRequest,
 } from '../../lib/dialog';
 import { Modal } from './Modal';
+import { inBody } from './portal';
 
 export interface DialogQueue {
   confirm: (opts: ConfirmOptions) => Promise<boolean>;
@@ -81,23 +81,7 @@ export function useDialogQueue(): DialogQueue {
   return { confirm, alert, request, settle };
 }
 
-const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
-
-/**
- * Render `node` into `document.body` (nothing on the server, where no
- * dialog is open). React events from a portal bubble up the component
- * tree, so clicks are stopped here and never reach e.g. a clickable row
- * the dialog was opened from.
- */
-export function inBody(node: ReactNode): ReactNode {
-  if (node === null || typeof document === 'undefined') return null;
-  return createPortal(
-    <div onClick={stop} onMouseDown={stop} onKeyDown={stop}>
-      {node}
-    </div>,
-    document.body,
-  );
-}
+export { inBody } from './portal';
 
 /**
  * Escape → cancel, Enter → confirm unless a button has focus (then the
