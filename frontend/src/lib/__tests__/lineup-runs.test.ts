@@ -10,6 +10,7 @@ import {
   lineupConfirmationText,
   lineupMissing,
   rosterForTeam,
+  rostersByTeam,
   toggleLineup,
   unknownLineupIds,
 } from '../lineup';
@@ -73,6 +74,32 @@ describe('roster & lineup editing', () => {
   ];
   it('rosterForTeam filters + sorts by position, then name', () => {
     expect(rosterForTeam(runners, 't1').map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
+  });
+  it('rostersByTeam groups per team in roster order (duplicate positions by name)', () => {
+    const m = rostersByTeam(runners);
+    expect(m.get('t1')?.map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
+    expect(m.get('t2')?.map((r) => r.id)).toEqual(['o1']);
+    expect(m.get('t3')).toBeUndefined();
+  });
+  it('rostersByTeam does not mutate its input', () => {
+    const input = [...runners];
+    rostersByTeam(input);
+    expect(input.map((r) => r.id)).toEqual(runners.map((r) => r.id));
+  });
+  it('rostersByTeam shows a server-side swap after reload', () => {
+    // Before: A at 1, B at 2. A moved to 2 → server swaps, reload returns both.
+    const a = { id: 'a', team_id: 't1', position: 1, first_name: 'A', last_name: 'Anton' };
+    const b = { id: 'b', team_id: 't1', position: 2, first_name: 'B', last_name: 'Berta' };
+    const before = [a, b];
+    const afterReload = [
+      { ...a, position: 2 },
+      { ...b, position: 1 },
+    ];
+    expect(rostersByTeam(before).get('t1')?.map((r) => r.id)).toEqual(['a', 'b']);
+    expect(rostersByTeam(afterReload).get('t1')?.map((r) => [r.id, r.position])).toEqual([
+      ['b', 1],
+      ['a', 2],
+    ]);
   });
   it('toggleLineup', () => {
     expect(toggleLineup([], 'r1')).toEqual(['r1']);

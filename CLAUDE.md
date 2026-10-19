@@ -283,7 +283,7 @@ Adding a variant requires a coordinated release with the desktop app.
 | User API key        | `USER#<sub>`                | `APIKEY#<key_id>`                   | `APIKEY#<hash_prefix>`       | `USER#<sub>`                  | hashed_key, created_at, last_used_at      |
 | Competition         | `COMP#<id>`                 | `META`                              | `USER#<owner_sub>`           | `COMP#<date>#<id>`            | name, date, mode, is_active, current_run_id, … |
 | Team                | `COMP#<id>`                 | `TEAM#<start_number>#<team_id>`     | —                            | —                             | name, start_number                        |
-| Runner              | `COMP#<id>`                 | `RUNNER#<team_id>#<position>`       | —                            | —                             | first_name, last_name, birth_date         |
+| Runner              | `COMP#<id>`                 | `RUNNER#<team_id>#<pos>#<id>`       | —                            | —                             | first_name, last_name, birth_date         |
 | Run                 | `COMP#<id>`                 | `RUN#<run_number>#<id>`             | `COMP#<id>#RUN`              | `STATUS#<status>#<run_number>`| team_id, runner_id, lane, original_time_ms, correction_ms, started_at, ended_at |
 | Penalty             | `COMP#<id>`                 | `PENALTY#<created_at>#<id>`         | `COMP#<id>#PENALTY`          | `STATUS#<status>#<created_at>`| run_id, team_id, runner_id, decider_slot, delta_ms, reason_code |
 | OAuth state         | `OAUTH_STATE#<state>`       | `STATE`                             | —                            | —                             | code_verifier, redirect_after, ttl        |
