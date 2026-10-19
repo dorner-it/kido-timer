@@ -9,8 +9,10 @@
 //!   ("ki1F2g…") and the GSI lookup key, so verification is at most one
 //!   `argon2id::verify` per matching prefix (overwhelmingly: exactly one).
 
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
 use argon2::Argon2;
+use argon2::password_hash::{
+    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
+};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 

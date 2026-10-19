@@ -58,10 +58,9 @@ pub async fn sign_in(
             let (jar, user) = open_session(&state, jar, tokens).await?;
             Ok((jar, Json(SignInResponse::Authenticated { user })).into_response())
         }
-        SignInOutcome::NewPasswordRequired { session } => Ok(Json(
-            SignInResponse::NewPasswordRequired { session, email },
-        )
-        .into_response()),
+        SignInOutcome::NewPasswordRequired { session } => {
+            Ok(Json(SignInResponse::NewPasswordRequired { session, email }).into_response())
+        }
     }
 }
 

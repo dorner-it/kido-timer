@@ -50,6 +50,9 @@ mod tests {
     #[test]
     fn random_token_is_url_safe() {
         let t = random_token(24);
-        assert!(t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 }

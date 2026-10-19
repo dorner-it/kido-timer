@@ -41,8 +41,7 @@ impl CognitoClient {
             .and_then(|c| c.client_secret)
             .ok_or_else(|| {
                 AppError::Internal(
-                    "Cognito user pool client has no secret — confidential client expected"
-                        .into(),
+                    "Cognito user pool client has no secret — confidential client expected".into(),
                 )
             })?;
 
