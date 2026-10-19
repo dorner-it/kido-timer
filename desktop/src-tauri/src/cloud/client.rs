@@ -51,8 +51,18 @@ impl CloudClient {
         self.get_json("/api/export/disciplines").await
     }
 
+    /// Live snapshot of one discipline. Only schema v4 is accepted
+    /// (checked before the full parse, see [`super::kido::parse_payload`]).
     pub async fn get_discipline(&self, id: Uuid) -> Result<DisciplinePayload, String> {
-        self.get_json(&format!("/api/export/disciplines/{id}")).await
+        let resp = self
+            .http
+            .get(self.url(&format!("/api/export/disciplines/{id}")))
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let bytes = success_bytes(resp).await?;
+        super::kido::parse_payload(&bytes)
     }
 
     pub async fn post_run_result(
@@ -88,6 +98,12 @@ impl CloudClient {
 }
 
 async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, String> {
+    let bytes = success_bytes(resp).await?;
+    serde_json::from_slice::<T>(&bytes).map_err(|e| format!("parse response failed: {e}"))
+}
+
+/// Body of a 2xx response, or the mapped error of any other status.
+async fn success_bytes(resp: reqwest::Response) -> Result<Vec<u8>, String> {
     let status = resp.status();
     let bytes = resp
         .bytes()
@@ -95,8 +111,7 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, Strin
         .map_err(|e| format!("read body failed: {e}"))?;
 
     if status.is_success() {
-        return serde_json::from_slice::<T>(&bytes)
-            .map_err(|e| format!("parse response failed: {e}"));
+        return Ok(bytes.to_vec());
     }
 
     let parsed: Result<Value, _> = serde_json::from_slice(&bytes);

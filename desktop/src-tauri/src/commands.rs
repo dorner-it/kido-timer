@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use crate::cloud::state::RecordOutcome;
 use crate::cloud::types::{
     CloudIdentity, DisciplineListItem, DisciplinePayload, EventSummary, FailedPost, OpenKidoResult,
-    RunResultRequest, RunStatus,
+    RunDivergence, RunStatus, SyncMode,
 };
+use crate::results::{CatalogueItem, ResultsResponse};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -95,8 +99,9 @@ pub async fn cloud_select_discipline(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     id: Uuid,
+    mode: Option<SyncMode>,
 ) -> Result<DisciplinePayload, String> {
-    state.cloud.select_discipline(app_handle, id).await
+    state.cloud.select_discipline(app_handle, id, mode).await
 }
 
 #[tauri::command]
@@ -109,30 +114,59 @@ pub fn cloud_snapshot(state: State<'_, AppState>) -> Option<DisciplinePayload> {
     state.cloud.current_snapshot()
 }
 
+/// Effective sync mode (web default + desktop override) for the loaded
+/// discipline. `offline` = on-prem.
+#[tauri::command]
+pub fn cloud_set_sync_mode(app_handle: AppHandle, state: State<'_, AppState>, mode: SyncMode) {
+    state.cloud.set_sync_mode(app_handle, mode);
+}
+
+/// Record a timing change on desktop lane `lane` (1-based = timer
+/// channel). Stored locally + persisted; posted when live.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn cloud_post_run_status(
+pub async fn cloud_record_lane_status(
     app_handle: AppHandle,
     state: State<'_, AppState>,
-    discipline_id: Uuid,
-    run_id: Uuid,
-    run_number: u32,
+    lane: u8,
+    overrides: Option<HashMap<u8, Uuid>>,
     status: RunStatus,
     original_time_ms: Option<u32>,
     started_at: Option<String>,
     ended_at: Option<String>,
-) -> Result<bool, String> {
-    let body = RunResultRequest {
-        run_number,
-        status,
-        original_time_ms,
-        started_at,
-        ended_at,
-    };
+) -> Result<RecordOutcome, String> {
     state
         .cloud
-        .maybe_post_run_status(app_handle, discipline_id, run_id, body)
+        .record_lane_status(
+            app_handle,
+            lane,
+            overrides.unwrap_or_default(),
+            status,
+            original_time_ms,
+            started_at,
+            ended_at,
+        )
         .await
+}
+
+#[tauri::command]
+pub fn cloud_divergences(state: State<'_, AppState>) -> Vec<RunDivergence> {
+    state.cloud.divergences()
+}
+
+/// `upload = true`: post local results; `false`: discard them.
+#[tauri::command]
+pub async fn cloud_resolve_divergence(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    upload: bool,
+) -> Result<(), String> {
+    state.cloud.resolve_divergence(app_handle, upload).await
+}
+
+#[tauri::command]
+pub fn cloud_take_startup_warning(state: State<'_, AppState>) -> Option<String> {
+    state.cloud.take_startup_warning()
 }
 
 #[tauri::command]
@@ -145,11 +179,7 @@ pub async fn cloud_retry_post(
 }
 
 #[tauri::command]
-pub fn cloud_clear_failed_post(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    run_id: Uuid,
-) {
+pub fn cloud_clear_failed_post(app_handle: AppHandle, state: State<'_, AppState>, run_id: Uuid) {
     state.cloud.clear_failed_post(app_handle, run_id);
 }
 
@@ -173,4 +203,22 @@ pub fn cloud_open_kido(
 #[tauri::command]
 pub fn cloud_export_kido(state: State<'_, AppState>, path: String) -> Result<(), String> {
     state.cloud.export_kido_file(path)
+}
+
+// ─── Results / catalogue (kido-core) ─────────────────────────────────────────
+
+/// WG rankings + Tagessieger of the loaded discipline (local view incl.
+/// unsynced results), computed with `kido_core::scoring`.
+#[tauri::command]
+pub fn compute_results(state: State<'_, AppState>) -> Result<ResultsResponse, String> {
+    let snapshot = state
+        .cloud
+        .current_snapshot()
+        .ok_or_else(|| "Kein Wettkampf geladen".to_string())?;
+    crate::results::compute(&snapshot)
+}
+
+#[tauri::command]
+pub fn kido_catalogue() -> Vec<CatalogueItem> {
+    crate::results::catalogue()
 }

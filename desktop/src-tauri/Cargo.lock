@@ -1743,12 +1743,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "kido-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "kido-timer-app"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "hmac",
  "keyring",
+ "kido-core",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",
@@ -1760,6 +1771,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tempfile",
  "time",
  "tokio",
  "uuid",

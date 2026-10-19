@@ -55,8 +55,7 @@ pub fn spawn_file_reader(
     speed: f64,
     tx: Sender<SerialEvent>,
 ) -> Result<FileReader, String> {
-    let raw_bytes =
-        parse_hexdump(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+    let raw_bytes = parse_hexdump(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let thread_stop = stop_flag.clone();
@@ -71,9 +70,7 @@ pub fn spawn_file_reader(
             }
 
             let remaining = &buffer[offset..];
-            let header_pos = remaining
-                .windows(HEADER.len())
-                .position(|w| w == HEADER);
+            let header_pos = remaining.windows(HEADER.len()).position(|w| w == HEADER);
 
             let header_pos = match header_pos {
                 Some(pos) => pos,

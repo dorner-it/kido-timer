@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::protocol::{ChannelStatus, DeviceMode, StateFlag, TimeChannel, TimerFrame, NUM_CHANNELS};
+use crate::protocol::{
+    ChannelStatus, DeviceMode, StateFlag, TimeChannel, TimerFrame, NUM_CHANNELS,
+};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -72,4 +74,3 @@ pub enum ConnectionEvent {
     Disconnected,
     Connected { source: String },
 }
-

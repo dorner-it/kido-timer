@@ -27,7 +27,12 @@
 ///   0x84 = Confirmed (final time)
 ///
 /// Time is stored as little-endian u16 milliseconds (max 65535ms ≈ 65.5s).
-
+//
+// TODO(hardware): open question whether the timer really caps at 65.5 s
+// (u16 ms) or wraps / uses the reserved byte for longer runs — a
+// Gruppenstafette run can exceed 65 s (+ SZ is added in software, not
+// here). Parser semantics intentionally unchanged until confirmed on the
+// device.
 use std::fmt;
 
 // -- Constants --
@@ -230,6 +235,7 @@ pub fn parse_frame(data: &[u8; FRAME_SIZE]) -> Result<TimerFrame, ParseError> {
         status: ChannelStatus::Inactive,
     }; NUM_CHANNELS];
 
+    #[allow(clippy::needless_range_loop)] // index also used for the byte offset
     for i in 0..NUM_CHANNELS {
         let base = OFF_CHANNELS + i * CHANNEL_SIZE;
         let time_lo = data[base] as u16;
@@ -258,6 +264,7 @@ mod tests {
     use super::*;
 
     /// Build a frame from components for testing.
+    #[allow(clippy::too_many_arguments)]
     fn make_frame(
         version: u8,
         mode: u8,
@@ -289,7 +296,10 @@ mod tests {
     fn test_parse_standby_frame() {
         // Frame from hex dump: all zeros, standby mode
         let frame = make_frame(
-            0x01, 0x00, 0x01, 0x00,
+            0x01,
+            0x00,
+            0x01,
+            0x00,
             [0, 0, 0, 0],
             [0, 0, 0, 0],
             [0, 0, 0, 0],
@@ -310,7 +320,10 @@ mod tests {
     fn test_parse_active_running() {
         // Two channels running at 100ms (0x0064)
         let frame = make_frame(
-            0x01, 0x02, 0x01, 0x00,
+            0x01,
+            0x02,
+            0x01,
+            0x00,
             [0x64, 0x00, 0x00, 0x81],
             [0x64, 0x00, 0x00, 0x81],
             [0, 0, 0, 0],
@@ -330,7 +343,10 @@ mod tests {
     fn test_parse_captured_and_running() {
         // CH1 captured at 1020ms (0x03FC), CH2 running at 1100ms (0x044C)
         let frame = make_frame(
-            0x01, 0x02, 0x01, 0x00,
+            0x01,
+            0x02,
+            0x01,
+            0x00,
             [0xFC, 0x03, 0x00, 0x82],
             [0x4C, 0x04, 0x00, 0x81],
             [0, 0, 0, 0],
@@ -347,7 +363,10 @@ mod tests {
     fn test_parse_confirmed() {
         // CH1=3620ms (0x0E24), CH2=35020ms (0x88CC), both confirmed
         let frame = make_frame(
-            0x01, 0x02, 0x01, 0x00,
+            0x01,
+            0x02,
+            0x01,
+            0x00,
             [0x24, 0x0E, 0x00, 0x84],
             [0xCC, 0x88, 0x00, 0x84],
             [0, 0, 0, 0],
@@ -363,7 +382,10 @@ mod tests {
     #[test]
     fn test_parse_armed_state() {
         let frame = make_frame(
-            0x01, 0x02, 0x01, 0x01,
+            0x01,
+            0x02,
+            0x01,
+            0x01,
             [0, 0, 0, 0],
             [0, 0, 0, 0],
             [0, 0, 0, 0],
@@ -385,8 +407,14 @@ mod tests {
     #[test]
     fn test_invalid_terminator() {
         let mut frame = make_frame(
-            0x01, 0x00, 0x01, 0x00,
-            [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0],
+            0x01,
+            0x00,
+            0x01,
+            0x00,
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
         );
         frame[39] = 0xFF;
         let result = parse_frame(&frame);
@@ -396,7 +424,10 @@ mod tests {
     #[test]
     fn test_raw_hex_string() {
         let frame = make_frame(
-            0x01, 0x02, 0x01, 0x00,
+            0x01,
+            0x02,
+            0x01,
+            0x00,
             [0x24, 0x0E, 0x00, 0x84],
             [0xCC, 0x88, 0x00, 0x84],
             [0, 0, 0, 0],
@@ -412,7 +443,10 @@ mod tests {
     fn test_lane_change() {
         // Lane 2 frame observed in hex dump
         let frame = make_frame(
-            0x01, 0x02, 0x02, 0x00,
+            0x01,
+            0x02,
+            0x02,
+            0x00,
             [0xFC, 0x03, 0x00, 0x84],
             [0xD6, 0x10, 0x00, 0x84],
             [0, 0, 0, 0],

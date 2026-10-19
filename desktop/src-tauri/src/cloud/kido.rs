@@ -1,16 +1,53 @@
+//! `.kido` envelope (schema v4): HMAC-SHA256 signing / verification and
+//! the version gate shared by file import, the live snapshot and polling.
+
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use hmac::{Hmac, Mac};
+use serde::Deserialize;
 use sha2::Sha256;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use super::types::{DisciplinePayload, KidoEnvelope};
 
-const ENVELOPE_VERSION: u32 = 2;
+/// Envelope version (`v`), equals the payload schema version.
+pub const ENVELOPE_VERSION: u32 = 4;
 const ALG: &str = "HS256";
-const SCHEMA_VERSION: u32 = 2;
+/// Payload `schema_version` this desktop build reads and writes.
+pub const SCHEMA_VERSION: u32 = 4;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Accept only [`SCHEMA_VERSION`]. The message tells the operator which
+/// side is outdated.
+pub fn check_schema_version(found: u32) -> Result<(), String> {
+    if found == SCHEMA_VERSION {
+        return Ok(());
+    }
+    if found < SCHEMA_VERSION {
+        return Err(format!(
+            "Veraltetes Datenformat v{found} — diese Desktop-Version erwartet v{SCHEMA_VERSION} (Gruppenstafette 2027). Bitte Web-App/Desktop aktualisieren und die Daten neu laden."
+        ));
+    }
+    Err(format!(
+        "Unbekanntes Datenformat v{found} — diese Desktop-Version erwartet v{SCHEMA_VERSION}. Bitte Web-App/Desktop aktualisieren."
+    ))
+}
+
+/// Parse a payload (file payload or live snapshot body). The version is
+/// probed **before** the full parse so an old payload (e.g. v2 with
+/// legacy `TimerMode` values) yields the clear version error instead of a
+/// cryptic parse error.
+pub fn parse_payload(bytes: &[u8]) -> Result<DisciplinePayload, String> {
+    #[derive(Deserialize)]
+    struct VersionProbe {
+        schema_version: u32,
+    }
+    let probe: VersionProbe = serde_json::from_slice(bytes)
+        .map_err(|e| format!("Daten nicht lesbar (schema_version fehlt): {e}"))?;
+    check_schema_version(probe.schema_version)?;
+    serde_json::from_slice(bytes).map_err(|e| format!("Daten nicht lesbar: {e}"))
+}
 
 fn decode_hmac_key(b64url: &str) -> Result<Vec<u8>, String> {
     URL_SAFE_NO_PAD
@@ -19,31 +56,32 @@ fn decode_hmac_key(b64url: &str) -> Result<Vec<u8>, String> {
 }
 
 fn sign(key: &[u8], payload_b64: &str) -> Result<String, String> {
-    let mut mac = HmacSha256::new_from_slice(key)
-        .map_err(|e| format!("hmac key invalid length: {e}"))?;
+    let mut mac =
+        HmacSha256::new_from_slice(key).map_err(|e| format!("hmac key invalid length: {e}"))?;
     mac.update(payload_b64.as_bytes());
     Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 
 fn verify_sig(key: &[u8], payload_b64: &str, sig_b64url: &str) -> Result<(), String> {
-    let mut mac = HmacSha256::new_from_slice(key)
-        .map_err(|e| format!("hmac key invalid length: {e}"))?;
+    let mut mac =
+        HmacSha256::new_from_slice(key).map_err(|e| format!("hmac key invalid length: {e}"))?;
     mac.update(payload_b64.as_bytes());
     let expected = URL_SAFE_NO_PAD
         .decode(sig_b64url.as_bytes())
         .map_err(|e| format!("signature decode failed: {e}"))?;
-    mac.verify_slice(&expected)
-        .map_err(|_| "signature mismatch".to_string())
+    mac.verify_slice(&expected).map_err(|_| {
+        "signature mismatch — Datei stammt nicht von diesem Konto oder wurde verändert".to_string()
+    })
 }
 
 fn decode_payload(payload_b64: &str) -> Result<DisciplinePayload, String> {
     let bytes = STANDARD
         .decode(payload_b64.as_bytes())
         .map_err(|e| format!("payload base64 decode failed: {e}"))?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("payload parse failed: {e}"))
+    parse_payload(&bytes)
 }
 
-fn now_rfc3339() -> Result<String, String> {
+pub fn now_rfc3339() -> Result<String, String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|e| format!("timestamp format failed: {e}"))
@@ -53,12 +91,7 @@ pub fn build_envelope(
     payload: &DisciplinePayload,
     hmac_key_b64: &str,
 ) -> Result<KidoEnvelope, String> {
-    if payload.schema_version != SCHEMA_VERSION {
-        return Err(format!(
-            "unsupported schema version {} (expected {SCHEMA_VERSION})",
-            payload.schema_version
-        ));
-    }
+    check_schema_version(payload.schema_version)?;
     let key = decode_hmac_key(hmac_key_b64)?;
     let payload_json =
         serde_json::to_vec(payload).map_err(|e| format!("payload serialize failed: {e}"))?;
@@ -79,12 +112,7 @@ pub fn verify_envelope(
     hmac_key_b64: &str,
     expected_owner_sub: &str,
 ) -> Result<DisciplinePayload, String> {
-    if envelope.v != ENVELOPE_VERSION {
-        return Err(format!(
-            "unsupported envelope version {} (expected {ENVELOPE_VERSION})",
-            envelope.v
-        ));
-    }
+    check_schema_version(envelope.v)?;
     if envelope.alg != ALG {
         return Err(format!(
             "unsupported envelope alg {:?} (expected {ALG})",
@@ -100,12 +128,6 @@ pub fn verify_envelope(
     let key = decode_hmac_key(hmac_key_b64)?;
     verify_sig(&key, &envelope.payload, &envelope.sig)?;
     let payload = decode_payload(&envelope.payload)?;
-    if payload.schema_version != SCHEMA_VERSION {
-        return Err(format!(
-            "unsupported payload schema_version {} (expected {SCHEMA_VERSION})",
-            payload.schema_version
-        ));
-    }
     if payload.owner_sub != expected_owner_sub {
         return Err(format!(
             "payload owner_sub {:?} does not match this account",
@@ -115,6 +137,8 @@ pub fn verify_envelope(
     Ok(payload)
 }
 
+/// Prepare a payload for `.kido` export: current schema, own clock, own
+/// `owner_sub`. IDs are preserved.
 pub fn restamp_for_export(
     payload: &DisciplinePayload,
     owner_sub: &str,
@@ -129,73 +153,140 @@ pub fn restamp_for_export(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud::types::{Discipline, DisciplinePayload, ExportedEvent, SyncMode, TimerMode};
+    use crate::cloud::fixtures::{sample_payload, sample_payload_json};
+    use crate::cloud::types::RunStatus;
 
-    fn fake_payload() -> DisciplinePayload {
-        let event_id = uuid::Uuid::nil();
-        let discipline_id = uuid::Uuid::nil();
-        DisciplinePayload {
-            schema_version: SCHEMA_VERSION,
-            exported_at: "2026-05-21T10:13:00Z".into(),
-            owner_sub: "abc".into(),
-            event: ExportedEvent {
-                id: event_id,
-                owner_sub: "abc".into(),
-                name: "Test".into(),
-                date: "2026-06-12".into(),
-                location: None,
-                is_active: true,
-                current_discipline_id: Some(discipline_id),
-                current_run_id: None,
-                station_token: None,
-                created_at: None,
-                updated_at: None,
-            },
-            discipline: Discipline {
-                id: discipline_id,
-                event_id,
-                name: "Löschangriff".into(),
-                mode: TimerMode::SingleLane,
-                sync_mode: SyncMode::Live,
-                position: 1,
-                created_at: None,
-                updated_at: None,
-            },
-            teams: vec![],
-            runners: vec![],
-            team_entries: vec![],
-            runs: vec![],
-            approved_penalties: vec![],
-        }
+    fn key() -> String {
+        URL_SAFE_NO_PAD.encode([7u8; 32])
     }
 
     #[test]
     fn round_trip_envelope() {
-        let key = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        let payload = fake_payload();
-        let envelope = build_envelope(&payload, &key).expect("build");
-        let decoded = verify_envelope(&envelope, &key, "abc").expect("verify");
-        assert_eq!(decoded.discipline.name, "Löschangriff");
+        let payload = sample_payload();
+        let envelope = build_envelope(&payload, &key()).expect("build");
+        assert_eq!(envelope.v, 4);
+        assert_eq!(envelope.alg, "HS256");
+        let decoded = verify_envelope(&envelope, &key(), "sub-1").expect("verify");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn round_trip_preserves_recorded_results() {
+        let mut payload = sample_payload();
+        let run = &mut payload.runs[0];
+        run.status = RunStatus::Completed;
+        run.original_time_ms = Some(47_240);
+        run.ended_at = Some("2027-06-12T10:01:00Z".into());
+        let restamped = restamp_for_export(&payload, "sub-1").unwrap();
+        let envelope = build_envelope(&restamped, &key()).unwrap();
+        let decoded = verify_envelope(&envelope, &key(), "sub-1").unwrap();
+        assert_eq!(decoded.runs[0].status, RunStatus::Completed);
+        assert_eq!(decoded.runs[0].original_time_ms, Some(47_240));
+        assert_eq!(decoded.schema_version, 4);
+        assert_eq!(decoded.runs, payload.runs);
     }
 
     #[test]
     fn rejects_wrong_owner() {
-        let key = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        let payload = fake_payload();
-        let envelope = build_envelope(&payload, &key).expect("build");
-        let err = verify_envelope(&envelope, &key, "other").unwrap_err();
+        let envelope = build_envelope(&sample_payload(), &key()).expect("build");
+        let err = verify_envelope(&envelope, &key(), "other").unwrap_err();
         assert!(err.contains("owner_sub"));
     }
 
     #[test]
     fn rejects_tampered_payload() {
-        let key = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        let payload = fake_payload();
-        let mut envelope = build_envelope(&payload, &key).expect("build");
+        let mut envelope = build_envelope(&sample_payload(), &key()).expect("build");
         let mut bytes = STANDARD.decode(&envelope.payload).unwrap();
         bytes[0] ^= 0x01;
         envelope.payload = STANDARD.encode(bytes);
-        let err = verify_envelope(&envelope, &key, "abc").unwrap_err();
+        let err = verify_envelope(&envelope, &key(), "sub-1").unwrap_err();
         assert!(err.contains("signature"));
+    }
+
+    #[test]
+    fn rejects_old_envelope_version() {
+        for v in [1, 2, 3] {
+            let mut envelope = build_envelope(&sample_payload(), &key()).unwrap();
+            envelope.v = v;
+            let err = verify_envelope(&envelope, &key(), "sub-1").unwrap_err();
+            assert!(err.contains(&format!("v{v}")), "{err}");
+            assert!(err.contains("Bitte Web-App/Desktop aktualisieren"), "{err}");
+        }
+    }
+
+    #[test]
+    fn rejects_newer_envelope_version() {
+        let mut envelope = build_envelope(&sample_payload(), &key()).unwrap();
+        envelope.v = 5;
+        let err = verify_envelope(&envelope, &key(), "sub-1").unwrap_err();
+        assert!(err.contains("Unbekanntes Datenformat v5"), "{err}");
+    }
+
+    #[test]
+    fn rejects_old_payload_version_inside_valid_envelope() {
+        // A correctly signed v4 envelope carrying a v3 payload.
+        let mut value: serde_json::Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        value["schema_version"] = 3.into();
+        let payload_b64 = STANDARD.encode(serde_json::to_vec(&value).unwrap());
+        let key_bytes = decode_hmac_key(&key()).unwrap();
+        let envelope = KidoEnvelope {
+            v: 4,
+            alg: "HS256".into(),
+            owner_sub: "sub-1".into(),
+            issued_at: "2027-06-12T10:00:00Z".into(),
+            sig: sign(&key_bytes, &payload_b64).unwrap(),
+            payload: payload_b64,
+        };
+        let err = verify_envelope(&envelope, &key(), "sub-1").unwrap_err();
+        assert!(err.contains("v3"), "{err}");
+        assert!(err.contains("Bitte Web-App/Desktop aktualisieren"), "{err}");
+    }
+
+    #[test]
+    fn parse_payload_probes_version_before_full_parse() {
+        // v2 payload with a legacy TimerMode: must fail with the version
+        // message, not with "unknown variant single_lane".
+        let mut value: serde_json::Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        value["schema_version"] = 2.into();
+        value["discipline"]["mode"] = "single_lane".into();
+        let err = parse_payload(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+        assert!(err.contains("Veraltetes Datenformat v2"), "{err}");
+    }
+
+    #[test]
+    fn parse_payload_rejects_missing_version() {
+        let err = parse_payload(br#"{"owner_sub":"x"}"#).unwrap_err();
+        assert!(err.contains("schema_version"), "{err}");
+    }
+
+    #[test]
+    fn parse_payload_accepts_v4() {
+        let p = parse_payload(sample_payload_json().as_bytes()).unwrap();
+        assert_eq!(p.schema_version, 4);
+    }
+
+    #[test]
+    fn build_envelope_refuses_non_v4_payload() {
+        let mut payload = sample_payload();
+        payload.schema_version = 2;
+        assert!(build_envelope(&payload, &key()).is_err());
+    }
+
+    #[test]
+    fn restamp_sets_owner_and_schema() {
+        let mut payload = sample_payload();
+        payload.schema_version = 4;
+        let next = restamp_for_export(&payload, "sub-2").unwrap();
+        assert_eq!(next.owner_sub, "sub-2");
+        assert_eq!(next.schema_version, SCHEMA_VERSION);
+        assert_eq!(next.discipline.id, payload.discipline.id);
+    }
+
+    #[test]
+    fn check_schema_version_only_accepts_4() {
+        assert!(check_schema_version(4).is_ok());
+        assert!(check_schema_version(0).is_err());
+        assert!(check_schema_version(3).is_err());
+        assert!(check_schema_version(5).is_err());
     }
 }
