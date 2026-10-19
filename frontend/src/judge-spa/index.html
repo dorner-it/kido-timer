@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Strafrichter – KI-DO Timer</title>
+  </head>
+  <body class="judge-app">
+    <!--
+      Static on-prem build of the judge app (`npm run build:judge`).
+      Served by the desktop under /judge/ in the venue LAN; the desktop
+      injects window.__KIDO_API_BASE__ / window.__KIDO_OWNER_SUB__ here.
+    -->
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

@@ -6,6 +6,8 @@ target/
 # Node / Astro
 node_modules/
 dist/
+# Static judge build (frontend `npm run build:judge`, embedded by the desktop)
+dist-judge/
 .astro/
 .cache/
 
