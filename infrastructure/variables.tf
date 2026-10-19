@@ -21,6 +21,12 @@ variable "github_repo" {
   default     = "dorner-it/kido-timer"
 }
 
+variable "github_repo_immutable" {
+  description = "Immutable OIDC form 'owner@owner_id/name@repo_id' (see GET /repos/{owner}/{repo}/actions/oidc/customization/sub, sub_claim_prefix). Used in the OIDC trust policy."
+  type        = string
+  default     = "dorner-it@88201897/kido-timer@1425183376"
+}
+
 variable "lambda_zip_path" {
   description = "Path to the cargo-lambda built deployment zip (used only on the initial apply; CI updates code thereafter)."
   type        = string
