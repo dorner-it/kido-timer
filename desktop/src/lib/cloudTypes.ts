@@ -191,7 +191,11 @@ export interface DisciplinePayload {
   runners: Runner[];
   team_entries: TeamEntry[];
   runs: Run[];
+  /** Nur bestätigte Fehler (Altleser). */
   approved_penalties: Penalty[];
+  /** Alle Fehler inkl. offen / zurückgenommen (PR 6, A1). Fehlt das
+   *  Feld (älteres Web), füllt Rust es aus `approved_penalties`. */
+  penalties: Penalty[];
 }
 
 export interface FailedPost {
@@ -204,6 +208,56 @@ export interface FailedPost {
   endedAt: string | null;
   error: string;
   failedAt: string;
+}
+
+/** Andere lokale On-prem-Änderungen, die noch nicht im Web sind. */
+export interface UnsyncedSummary {
+  penalties: number;
+  lineups: number;
+  handTimes: number;
+}
+
+/** Abweichungen beim Wechsel zurück auf Live. */
+export interface DivergenceState {
+  divergences: RunDivergence[];
+  unsynced: UnsyncedSummary;
+}
+
+/** Ergebnis von „Ins Web hochladen“ (A3). */
+export interface UploadOutcome {
+  runsUpdated: number;
+  penaltiesUpserted: number;
+  runsSent: number;
+  penaltiesSent: number;
+}
+
+export interface OnPremClient {
+  ip: string;
+  lastSeenSecs: number;
+  requests: number;
+}
+
+export interface JudgeLink {
+  address: string;
+  url: string;
+  qrSvg: string;
+}
+
+/** Status des lokalen Strafrichter-Servers. */
+export interface OnPremStatus {
+  running: boolean;
+  port: number | null;
+  links: JudgeLink[];
+  token: string | null;
+  ownerSub: string | null;
+  uptimeSecs: number | null;
+  clients: OnPremClient[];
+  error: string | null;
+  judgeUiBuilt: boolean;
+  /** Vorschau „Ins Web hochladen“: geänderte Läufe / Fehler. */
+  uploadRuns: number;
+  uploadPenalties: number;
+  lastUploadAt: string | null;
 }
 
 /** Lokal erfasstes Ergebnis, das vom Web-Stand abweicht. */
@@ -252,4 +306,6 @@ export type CloudEvent =
   | { type: "resultPosted"; run_id: string; status: RunStatus }
   | { type: "resultPostFailed"; run_id: string; message: string }
   | { type: "failedPostsChanged"; failures: FailedPost[] }
-  | { type: "divergenceChanged"; divergences: RunDivergence[] };
+  | { type: "divergenceChanged"; divergences: RunDivergence[]; unsynced: UnsyncedSummary }
+  | { type: "onPremChanged"; status: OnPremStatus }
+  | { type: "onPremClientSeen"; ip: string };

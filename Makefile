@@ -1,7 +1,7 @@
 .PHONY: setup \
 	backend-dev backend-test backend-build backend-check \
 	frontend-install frontend-dev frontend-build frontend-check \
-	desktop-install desktop-dev desktop-check check-all \
+	desktop-install desktop-dev desktop-check judge-build check-all \
 	lint fmt \
 	tf-init tf-fmt tf-validate tf-plan tf-apply \
 	dynamodb-up dynamodb-down
@@ -47,9 +47,13 @@ desktop-install:
 desktop-dev:
 	cd desktop && npx tauri dev
 
-desktop-check:
+# The judge UI (frontend/dist-judge) is embedded into the desktop binary.
+judge-build:
+	cd frontend && npm run build:judge
+
+desktop-check: judge-build
 	cd desktop && npm run build && npm test
-	cd desktop/src-tauri && cargo check --all-targets && cargo test
+	cd desktop/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo check --all-targets && cargo test
 
 core-test:
 	cd crates/kido-core && cargo clippy --all-targets -- -D warnings && cargo test

@@ -445,23 +445,81 @@ impl From<PenaltyWire> for Penalty {
 
 /// Inner payload of a `.kido` envelope (schema v4). Also the response
 /// shape of `GET /api/export/disciplines/:id`.
+///
+/// `penalties` (PR 6, contract A1) carries **all** penalties of the
+/// discipline (pending, approved, rejected); `approved_penalties` stays
+/// for old readers. Readers tolerate a missing `penalties` field: it then
+/// falls back to `approved_penalties` (older web backend), so the desktop
+/// always works on `penalties` and prefers it whenever it is present.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(from = "DisciplinePayloadWire")]
 pub struct DisciplinePayload {
     pub schema_version: u32,
     pub exported_at: String,
     pub owner_sub: String,
     pub event: ExportedEvent,
     pub discipline: Discipline,
-    #[serde(default)]
     pub teams: Vec<Team>,
-    #[serde(default)]
     pub runners: Vec<Runner>,
-    #[serde(default)]
     pub team_entries: Vec<TeamEntry>,
-    #[serde(default)]
     pub runs: Vec<Run>,
-    #[serde(default)]
+    /// Approved penalties only (legacy readers; kept in sync with
+    /// `penalties` by the local store view).
     pub approved_penalties: Vec<Penalty>,
+    /// All penalties incl. pending / rejected (A1).
+    pub penalties: Vec<Penalty>,
+}
+
+#[derive(Deserialize)]
+struct DisciplinePayloadWire {
+    schema_version: u32,
+    exported_at: String,
+    owner_sub: String,
+    event: ExportedEvent,
+    discipline: Discipline,
+    #[serde(default)]
+    teams: Vec<Team>,
+    #[serde(default)]
+    runners: Vec<Runner>,
+    #[serde(default)]
+    team_entries: Vec<TeamEntry>,
+    #[serde(default)]
+    runs: Vec<Run>,
+    #[serde(default)]
+    approved_penalties: Vec<Penalty>,
+    #[serde(default)]
+    penalties: Option<Vec<Penalty>>,
+}
+
+impl From<DisciplinePayloadWire> for DisciplinePayload {
+    fn from(w: DisciplinePayloadWire) -> Self {
+        let penalties = w.penalties.unwrap_or_else(|| w.approved_penalties.clone());
+        Self {
+            schema_version: w.schema_version,
+            exported_at: w.exported_at,
+            owner_sub: w.owner_sub,
+            event: w.event,
+            discipline: w.discipline,
+            teams: w.teams,
+            runners: w.runners,
+            team_entries: w.team_entries,
+            runs: w.runs,
+            approved_penalties: w.approved_penalties,
+            penalties,
+        }
+    }
+}
+
+impl DisciplinePayload {
+    /// Recompute `approved_penalties` from `penalties` (legacy readers).
+    pub fn sync_approved_penalties(&mut self) {
+        self.approved_penalties = self
+            .penalties
+            .iter()
+            .filter(|p| p.status == PenaltyStatus::Approved)
+            .cloned()
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -484,6 +542,81 @@ pub struct RunResultRequest {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+}
+
+/// One run of the on-prem upload (contract A3): only the fields the
+/// desktop may change.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OnPremUploadRun {
+    pub id: Uuid,
+    pub run_number: u32,
+    pub status: RunStatus,
+    pub original_time_ms: Option<u32>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub lineup: Vec<Uuid>,
+    pub lineup_confirmed_at: Option<String>,
+    pub lineup_confirmed_by: Option<LineupConfirmedBy>,
+    pub time_source: TimeSource,
+    pub hand_time_1_ms: Option<u32>,
+    pub hand_time_2_ms: Option<u32>,
+}
+
+impl OnPremUploadRun {
+    pub fn from_run(run: &Run) -> Self {
+        Self {
+            id: run.id,
+            run_number: run.run_number,
+            status: run.status,
+            original_time_ms: run.original_time_ms,
+            started_at: run.started_at.clone(),
+            ended_at: run.ended_at.clone(),
+            lineup: run.lineup.clone(),
+            lineup_confirmed_at: run.lineup_confirmed_at.clone(),
+            lineup_confirmed_by: run.lineup_confirmed_by,
+            time_source: run.time_source,
+            hand_time_1_ms: run.hand_time_1_ms,
+            hand_time_2_ms: run.hand_time_2_ms,
+        }
+    }
+
+    /// Write the uploaded fields onto `run` (the web accepted them).
+    pub fn apply_to(&self, run: &mut Run) {
+        run.status = self.status;
+        run.original_time_ms = self.original_time_ms;
+        run.started_at = self.started_at.clone();
+        run.ended_at = self.ended_at.clone();
+        run.lineup = self.lineup.clone();
+        run.lineup_confirmed_at = self.lineup_confirmed_at.clone();
+        run.lineup_confirmed_by = self.lineup_confirmed_by;
+        run.time_source = self.time_source;
+        run.hand_time_1_ms = self.hand_time_1_ms;
+        run.hand_time_2_ms = self.hand_time_2_ms;
+    }
+}
+
+/// Body of `POST /api/export/disciplines/{id}/onprem-upload` (A3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OnPremUploadRequest {
+    /// Only the runs changed on the desktop.
+    pub runs: Vec<OnPremUploadRun>,
+    /// All penalties of the discipline (full rows; id = client id).
+    pub penalties: Vec<Penalty>,
+    /// Cleared after an on-prem day (contract default).
+    pub current_run_ids: Vec<Uuid>,
+}
+
+/// Response of A3.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OnPremUploadResponse {
+    pub runs_updated: u32,
+    pub penalties_upserted: u32,
+}
+
+/// Body of `POST /api/export/disciplines/{id}/sync-mode` (A2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SyncModeRequest {
+    pub sync_mode: SyncMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -562,10 +695,48 @@ pub enum CloudEvent {
         failures: Vec<FailedPost>,
     },
     /// Local results differ from the web after switching to live; the
-    /// operator decides (upload / discard). Empty list = resolved.
+    /// operator decides (upload / discard). Empty = resolved.
     DivergenceChanged {
         divergences: Vec<RunDivergence>,
+        unsynced: UnsyncedSummary,
     },
+    /// On-prem server started / stopped / token rotated.
+    OnPremChanged {
+        status: crate::local::server::OnPremStatus,
+    },
+    /// A phone talked to the on-prem server for the first time.
+    OnPremClientSeen {
+        ip: String,
+    },
+}
+
+/// On-prem changes besides run timing that are not on the web yet.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsyncedSummary {
+    pub penalties: usize,
+    pub lineups: usize,
+    pub hand_times: usize,
+}
+
+impl UnsyncedSummary {
+    pub fn is_empty(&self) -> bool {
+        self.penalties == 0 && self.lineups == 0 && self.hand_times == 0
+    }
+}
+
+/// Divergence after going live: timing rows + other unsynced changes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DivergenceState {
+    pub divergences: Vec<RunDivergence>,
+    pub unsynced: UnsyncedSummary,
+}
+
+impl DivergenceState {
+    pub fn is_empty(&self) -> bool {
+        self.divergences.is_empty() && self.unsynced.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -830,6 +1001,11 @@ mod tests {
     #[test]
     fn divergence_event_serializes_camel_case() {
         let ev = CloudEvent::DivergenceChanged {
+            unsynced: UnsyncedSummary {
+                penalties: 2,
+                lineups: 1,
+                hand_times: 0,
+            },
             divergences: vec![RunDivergence {
                 run_id: id(RUN_A1),
                 run_number: 1,
@@ -844,5 +1020,120 @@ mod tests {
         assert_eq!(v["type"], "divergenceChanged");
         assert_eq!(v["divergences"][0]["localStatus"], "completed");
         assert_eq!(v["divergences"][0]["runNumber"], 1);
+        assert_eq!(v["unsynced"]["penalties"], 2);
+        assert_eq!(v["unsynced"]["handTimes"], 0);
+    }
+
+    #[test]
+    fn missing_penalties_fall_back_to_approved() {
+        let mut v: Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        v.as_object_mut().unwrap().remove("penalties");
+        let p: DisciplinePayload = serde_json::from_value(v).unwrap();
+        assert_eq!(p.penalties, p.approved_penalties);
+        assert_eq!(p.penalties.len(), 1);
+    }
+
+    #[test]
+    fn missing_penalties_and_approved_default_to_empty() {
+        let mut v: Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("penalties");
+        o.remove("approved_penalties");
+        let p: DisciplinePayload = serde_json::from_value(v).unwrap();
+        assert!(p.penalties.is_empty());
+        assert!(p.approved_penalties.is_empty());
+    }
+
+    #[test]
+    fn penalties_preferred_over_approved_when_present() {
+        let mut v: Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        let mut pending = v["penalties"][0].clone();
+        pending["id"] = "00000000-0000-4000-8000-00000000f0ff".into();
+        pending["status"] = "pending".into();
+        v["penalties"].as_array_mut().unwrap().push(pending);
+        let p: DisciplinePayload = serde_json::from_value(v).unwrap();
+        assert_eq!(p.penalties.len(), 2);
+        assert_eq!(p.approved_penalties.len(), 1);
+        assert_eq!(p.penalties[1].status, PenaltyStatus::Pending);
+    }
+
+    #[test]
+    fn empty_penalties_present_is_respected() {
+        let mut v: Value = serde_json::from_str(&sample_payload_json()).unwrap();
+        v["penalties"] = json!([]);
+        let p: DisciplinePayload = serde_json::from_value(v).unwrap();
+        assert!(p.penalties.is_empty());
+        assert_eq!(p.approved_penalties.len(), 1);
+    }
+
+    #[test]
+    fn sync_approved_penalties_filters_status() {
+        let mut p = sample_payload();
+        p.penalties[0].status = PenaltyStatus::Rejected;
+        p.sync_approved_penalties();
+        assert!(p.approved_penalties.is_empty());
+        p.penalties[0].status = PenaltyStatus::Approved;
+        p.sync_approved_penalties();
+        assert_eq!(p.approved_penalties.len(), 1);
+    }
+
+    #[test]
+    fn upload_request_wire_shape() {
+        let p = sample_payload();
+        let req = OnPremUploadRequest {
+            runs: vec![OnPremUploadRun::from_run(&p.runs[0])],
+            penalties: p.penalties.clone(),
+            current_run_ids: vec![],
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        let run = &v["runs"][0];
+        for key in [
+            "id",
+            "run_number",
+            "status",
+            "original_time_ms",
+            "started_at",
+            "ended_at",
+            "lineup",
+            "lineup_confirmed_at",
+            "lineup_confirmed_by",
+            "time_source",
+            "hand_time_1_ms",
+            "hand_time_2_ms",
+        ] {
+            assert!(run.get(key).is_some(), "missing {key}");
+        }
+        assert_eq!(run.as_object().unwrap().len(), 12, "only A3 run fields");
+        assert_eq!(run["lineup_confirmed_by"], "startlinie");
+        assert_eq!(run["time_source"], "lichtschranke");
+        assert_eq!(v["penalties"][0]["status"], "approved");
+        assert_eq!(v["current_run_ids"], json!([]));
+        let resp: OnPremUploadResponse =
+            serde_json::from_value(json!({"runs_updated": 1, "penalties_upserted": 3})).unwrap();
+        assert_eq!(resp.penalties_upserted, 3);
+        let mode = serde_json::to_value(SyncModeRequest {
+            sync_mode: SyncMode::Live,
+        })
+        .unwrap();
+        assert_eq!(mode, json!({"sync_mode": "live"}));
+    }
+
+    #[test]
+    fn upload_run_apply_round_trip() {
+        let p = sample_payload();
+        let mut target = p.runs[1].clone();
+        let mut src = p.runs[0].clone();
+        src.id = target.id;
+        src.run_number = target.run_number;
+        src.status = RunStatus::Completed;
+        src.original_time_ms = Some(47_240);
+        src.time_source = TimeSource::Handstopp;
+        src.hand_time_1_ms = Some(47_230);
+        src.hand_time_2_ms = Some(47_245);
+        let up = OnPremUploadRun::from_run(&src);
+        up.apply_to(&mut target);
+        assert_eq!(OnPremUploadRun::from_run(&target), up);
+        // Fields outside the upload stay.
+        assert_eq!(target.team_id, p.runs[1].team_id);
     }
 }

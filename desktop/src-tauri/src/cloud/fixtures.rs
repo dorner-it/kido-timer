@@ -1,5 +1,5 @@
 //! Test fixtures: a schema-v4 discipline payload exactly as the backend
-//! (`backend/src/export.rs`) serializes it.
+//! (`backend/src/export.rs`) serializes it (incl. `penalties`, contract A1).
 
 use uuid::Uuid;
 
@@ -105,6 +105,15 @@ pub fn sample_payload_json() -> String {
        "created_at": "2027-01-01T00:00:00Z", "updated_at": "2027-01-01T00:00:00Z" }}
   ],
   "approved_penalties": [
+    {{ "id": "{PENALTY_1}", "event_id": "{EVENT}", "discipline_id": "{DISCIPLINE}",
+       "run_id": "{RUN_A1}", "team_id": "{TEAM_A}", "runner_id": null,
+       "kind": "sz", "code": "knotengestell.ein_knoten_falsch", "station": "knotengestell",
+       "is_disqualification": false, "decider_slot": 0, "delta_ms": 15000,
+       "reason_code": null, "status": "approved",
+       "created_at": "2027-06-12T09:40:00Z", "reviewed_at": "2027-06-12T09:45:00Z",
+       "reviewed_by": "fbl@example.org" }}
+  ],
+  "penalties": [
     {{ "id": "{PENALTY_1}", "event_id": "{EVENT}", "discipline_id": "{DISCIPLINE}",
        "run_id": "{RUN_A1}", "team_id": "{TEAM_A}", "runner_id": null,
        "kind": "sz", "code": "knotengestell.ein_knoten_falsch", "station": "knotengestell",

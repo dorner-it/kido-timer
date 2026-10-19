@@ -10,7 +10,7 @@ mod serial_reader;
 mod state;
 
 use state::AppState;
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -63,7 +63,23 @@ pub fn run() {
             commands::cloud_export_kido,
             commands::compute_results,
             commands::kido_catalogue,
+            commands::hand_time_mean,
+            commands::onprem_status,
+            commands::onprem_rotate_token,
+            commands::onprem_set_current_runs,
+            commands::onprem_review_penalty,
+            commands::onprem_take_over,
+            commands::onprem_set_lineup,
+            commands::onprem_set_hand_times,
+            commands::onprem_clear_hand_times,
+            commands::cloud_upload_onprem,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running KiDo-Timer");
+        .build(tauri::generate_context!())
+        .expect("error while building KiDo-Timer")
+        .run(|app, event| {
+            // Graceful shutdown of the on-prem judge server.
+            if let RunEvent::Exit = event {
+                app.state::<AppState>().cloud.shutdown_server();
+            }
+        });
 }

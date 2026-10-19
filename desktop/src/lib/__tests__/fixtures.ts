@@ -103,5 +103,6 @@ export function samplePayload(): DisciplinePayload {
       run({ id: RUN_C1, team_id: "team-c", run_number: 3, lane: null }),
     ],
     approved_penalties: [],
+    penalties: [],
   };
 }

@@ -1,24 +1,27 @@
 import { useState } from "react";
 import { t } from "../lib/i18n";
-import type { DisciplinePayload, RunDivergence, RunStatus } from "../lib/cloudTypes";
+import type { DisciplinePayload, DivergenceState, RunStatus } from "../lib/cloudTypes";
 import { formatResultTime } from "../lib/results";
 
 interface Props {
-  divergences: RunDivergence[];
+  divergence: DivergenceState;
   snapshot: DisciplinePayload | null;
   onUpload: () => Promise<void>;
   onDiscard: () => Promise<void>;
 }
 
 /**
- * Shown after switching back to live when local results differ from the
- * web. Nothing is overwritten silently: the operator uploads (one result
- * POST per run) or discards the local changes.
+ * Shown after switching back to live when local changes differ from the
+ * web. Nothing is overwritten silently: the operator uploads everything
+ * in one on-prem upload (A3: run times, errors incl. status, lineups,
+ * hand times) or discards the local changes.
  */
-export function DivergenceDialog({ divergences, snapshot, onUpload, onDiscard }: Props) {
+export function DivergenceDialog({ divergence, snapshot, onUpload, onDiscard }: Props) {
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  if (divergences.length === 0) return null;
+  const { divergences, unsynced } = divergence;
+  const extras = t.divergence.extras(unsynced.penalties, unsynced.lineups, unsynced.handTimes);
+  if (divergences.length === 0 && !extras) return null;
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -43,6 +46,7 @@ export function DivergenceDialog({ divergences, snapshot, onUpload, onDiscard }:
         </header>
 
         <div className="max-h-[45vh] overflow-y-auto px-7 py-4">
+          {divergences.length > 0 && (
           <table className="w-full font-mono text-[12px]">
             <thead>
               <tr className="text-left text-ink-200/70">
@@ -67,7 +71,9 @@ export function DivergenceDialog({ divergences, snapshot, onUpload, onDiscard }:
               ))}
             </tbody>
           </table>
-          <p className="mt-3 font-mono text-[10px] text-ink-200/60">{t.divergence.todo}</p>
+          )}
+          {extras && <p className="mt-3 font-mono text-[12px] text-ink-100">{extras}</p>}
+          <p className="mt-3 font-mono text-[10px] text-ink-200/60">{t.divergence.uploadNote}</p>
         </div>
 
         <footer className="flex flex-col gap-2 border-t border-ink-50/[0.05] bg-ink-900/40 px-7 py-4">

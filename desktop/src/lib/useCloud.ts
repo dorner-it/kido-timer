@@ -17,8 +17,19 @@ import {
   cloudSetSyncMode,
   cloudSnapshot,
   cloudTakeStartupWarning,
+  cloudUploadOnPrem,
+  EMPTY_DIVERGENCE,
   kidoCatalogue,
   listenCloudEvents,
+  OFFLINE_STATUS,
+  onPremClearHandTimes,
+  onPremReviewPenalty,
+  onPremRotateToken,
+  onPremSetCurrentRuns,
+  onPremSetHandTimes,
+  onPremSetLineup,
+  onPremStatus,
+  onPremTakeOver,
   pickKidoFile,
   type RecordLaneArgs,
 } from "./cloudApi";
@@ -28,11 +39,13 @@ import type {
   CloudIdentity,
   DisciplineListItem,
   DisciplinePayload,
+  DivergenceState,
   FailedPost,
   KidoConflict,
+  OnPremStatus,
   OpenKidoResult,
-  RunDivergence,
   SyncMode,
+  UploadOutcome,
 } from "./cloudTypes";
 import {
   loadSyncOverrides,
@@ -52,8 +65,10 @@ interface State {
   failedPosts: FailedPost[];
   /** Operator overrides — desktop lane (1..4) → run_id (UUID). */
   laneOverrides: Record<number, string>;
-  /** Local results that differ from the web (live mode blocked). */
-  divergences: RunDivergence[];
+  /** Local changes that differ from the web (live mode blocked). */
+  divergence: DivergenceState;
+  /** On-prem judge server status. */
+  onPrem: OnPremStatus;
   /** Desktop sync-mode overrides per discipline id. */
   syncOverrides: SyncOverrides;
   catalogue: CatalogueItem[];
@@ -68,7 +83,8 @@ type Action =
   | { type: "setResultMessage"; message: string | null }
   | { type: "setFailedPosts"; failures: FailedPost[] }
   | { type: "setLaneOverride"; lane: number; runId: string | null }
-  | { type: "setDivergences"; divergences: RunDivergence[] }
+  | { type: "setDivergence"; divergence: DivergenceState }
+  | { type: "setOnPrem"; status: OnPremStatus }
   | { type: "setSyncOverrides"; overrides: SyncOverrides }
   | { type: "setCatalogue"; catalogue: CatalogueItem[] }
   | { type: "cleared" };
@@ -83,7 +99,8 @@ function initialState(): State {
     lastResultMessage: null,
     failedPosts: [],
     laneOverrides: {},
-    divergences: [],
+    divergence: EMPTY_DIVERGENCE,
+    onPrem: OFFLINE_STATUS,
     syncOverrides: loadSyncOverrides(),
     catalogue: [],
   };
@@ -121,8 +138,10 @@ function reducer(s: State, a: Action): State {
       else delete next[a.lane];
       return { ...s, laneOverrides: next };
     }
-    case "setDivergences":
-      return { ...s, divergences: a.divergences };
+    case "setDivergence":
+      return { ...s, divergence: a.divergence };
+    case "setOnPrem":
+      return { ...s, onPrem: a.status };
     case "setSyncOverrides":
       return { ...s, syncOverrides: a.overrides };
     case "setCatalogue":
@@ -135,7 +154,8 @@ function reducer(s: State, a: Action): State {
         snapshot: s.snapshot,
         laneOverrides: s.laneOverrides,
         catalogue: s.catalogue,
-        divergences: [],
+        onPrem: s.onPrem,
+        divergence: EMPTY_DIVERGENCE,
       };
   }
 }
@@ -164,7 +184,10 @@ export function useCloud() {
       if (mounted) dispatch({ type: "setFailedPosts", failures: f });
     });
     cloudDivergences().then((d) => {
-      if (mounted) dispatch({ type: "setDivergences", divergences: d });
+      if (mounted) dispatch({ type: "setDivergence", divergence: d });
+    });
+    onPremStatus().then((st) => {
+      if (mounted) dispatch({ type: "setOnPrem", status: st });
     });
     cloudTakeStartupWarning().then((w) => {
       if (mounted && w) dispatch({ type: "setError", error: w });
@@ -205,7 +228,18 @@ export function useCloud() {
           dispatch({ type: "setFailedPosts", failures: event.failures });
           break;
         case "divergenceChanged":
-          dispatch({ type: "setDivergences", divergences: event.divergences });
+          dispatch({
+            type: "setDivergence",
+            divergence: { divergences: event.divergences, unsynced: event.unsynced },
+          });
+          break;
+        case "onPremChanged":
+          dispatch({ type: "setOnPrem", status: event.status });
+          break;
+        case "onPremClientSeen":
+          void onPremStatus().then((st) => {
+            if (mounted) dispatch({ type: "setOnPrem", status: st });
+          });
           break;
       }
     }).then((u) => {
@@ -284,7 +318,7 @@ export function useCloud() {
   const deselect = useCallback(async () => {
     await cloudDeselect();
     dispatch({ type: "setSnapshot", snapshot: null });
-    dispatch({ type: "setDivergences", divergences: [] });
+    dispatch({ type: "setDivergence", divergence: EMPTY_DIVERGENCE });
   }, []);
 
   const adoptOpened = useCallback((result: OpenKidoResult) => {
@@ -400,6 +434,64 @@ export function useCloud() {
     await cloudClearFailedPost(runId);
   }, []);
 
+  // ── on-prem ───────────────────────────────────────────────────────
+
+  const refreshOnPrem = useCallback(async () => {
+    try {
+      dispatch({ type: "setOnPrem", status: await onPremStatus() });
+    } catch (e) {
+      dispatch({ type: "setError", error: String(e) });
+    }
+  }, []);
+
+  const rotateOnPremToken = useCallback(async () => {
+    try {
+      dispatch({ type: "setOnPrem", status: await onPremRotateToken() });
+    } catch (e) {
+      dispatch({ type: "setError", error: String(e) });
+    }
+  }, []);
+
+  /** Wraps an organizer command: errors go to the banner, `false` returned. */
+  const organizer = useCallback(async (fn: () => Promise<unknown>): Promise<boolean> => {
+    try {
+      await fn();
+      return true;
+    } catch (e) {
+      dispatch({ type: "setError", error: String(e) });
+      return false;
+    }
+  }, []);
+
+  const setCurrentRuns = useCallback(
+    (runIds: string[]) => organizer(() => onPremSetCurrentRuns(runIds)),
+    [organizer],
+  );
+  const reviewPenalty = useCallback(
+    (penaltyId: string, approve: boolean) =>
+      organizer(() => onPremReviewPenalty(penaltyId, approve)),
+    [organizer],
+  );
+  const takeOver = useCallback(
+    (runId: string) => organizer(() => onPremTakeOver(runId)),
+    [organizer],
+  );
+  const setLineup = useCallback(
+    (runId: string, runnerIds: string[]) => organizer(() => onPremSetLineup(runId, runnerIds)),
+    [organizer],
+  );
+  const setHandTimes = useCallback(
+    (runId: string, t1: number, t2: number) => organizer(() => onPremSetHandTimes(runId, t1, t2)),
+    [organizer],
+  );
+  const clearHandTimes = useCallback(
+    (runId: string) => organizer(() => onPremClearHandTimes(runId)),
+    [organizer],
+  );
+
+  /** "Ins Web hochladen" (A3); throws so the dialog can show the error. */
+  const uploadOnPrem = useCallback(async (): Promise<UploadOutcome> => cloudUploadOnPrem(), []);
+
   const dismissResultMessage = useCallback(() => {
     dispatch({ type: "setResultMessage", message: null });
   }, []);
@@ -427,6 +519,15 @@ export function useCloud() {
     dismissFailedPost,
     dismissResultMessage,
     dismissError,
+    refreshOnPrem,
+    rotateOnPremToken,
+    setCurrentRuns,
+    reviewPenalty,
+    takeOver,
+    setLineup,
+    setHandTimes,
+    clearHandTimes,
+    uploadOnPrem,
   };
 }
 

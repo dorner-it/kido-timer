@@ -6,7 +6,8 @@
 //!   (pending / active / cancelled runs are passed but ignored by scoring),
 //! - measured time = `original_time_ms` (light barrier or hand-time mean);
 //!   the legacy `correction_ms` is **never** added (SZ would count twice),
-//! - penalties = the snapshot's penalties of the run (kind + status),
+//! - penalties = the snapshot's `penalties` of the run (all statuses,
+//!   kind + status; pending counts as provisional, rejected not),
 //! - lineup = `Run.lineup`,
 //! - teams = team entries of this discipline **with** a WG; entries
 //!   without WG ("WG fehlt") are excluded and listed separately.
@@ -101,7 +102,7 @@ pub fn scoring_input(snapshot: &DisciplinePayload) -> Result<ScoringInput, Strin
             // Never `original + correction_ms` — see module docs.
             measured_ms: r.original_time_ms,
             penalties: snapshot
-                .approved_penalties
+                .penalties
                 .iter()
                 .filter(|p| p.run_id == r.id)
                 .map(|p| PenaltyInput {
@@ -248,7 +249,7 @@ mod tests {
         let mut s = sample_payload();
         complete(&mut s, RUN_A1, 40_000);
         complete(&mut s, RUN_B1, 50_000);
-        s.approved_penalties[0].kind = PenaltyKind::Fv;
+        s.penalties[0].kind = PenaltyKind::Fv;
         let res = compute(&s).unwrap();
         let rows = &res.results.wg_rankings[0].rows;
         assert_eq!(rows[0].team_id, id(TEAM_B));
@@ -262,7 +263,7 @@ mod tests {
     fn tagessieger_uses_lineup_ages_on_competition_day() {
         let mut s = sample_payload();
         complete(&mut s, RUN_A1, 50_000);
-        s.approved_penalties.clear();
+        s.penalties.clear();
         let res = compute(&s).unwrap();
         let ts = &res.results.tagessieger[0];
         assert_eq!(ts.team_id, id(TEAM_A));
@@ -295,6 +296,27 @@ mod tests {
         let input = scoring_input(&s).unwrap();
         assert_eq!(input.runners_without_birth_date, vec![id(RUNNER_A1)]);
         assert_eq!(input.teams[0].runners.len(), 1);
+    }
+
+    #[test]
+    fn pending_and_rejected_penalties_are_scored_from_penalties() {
+        let mut s = sample_payload();
+        complete(&mut s, RUN_A1, 40_000);
+        let mut pending = s.penalties[0].clone();
+        pending.id = Uuid::new_v4();
+        pending.status = PenaltyStatus::Pending;
+        let mut rejected = s.penalties[0].clone();
+        rejected.id = Uuid::new_v4();
+        rejected.status = PenaltyStatus::Rejected;
+        s.penalties.push(pending);
+        s.penalties.push(rejected);
+        let input = scoring_input(&s).unwrap();
+        let run = input.runs.iter().find(|r| r.run_id == id(RUN_A1)).unwrap();
+        assert_eq!(run.penalties.len(), 3);
+        let res = compute(&s).unwrap();
+        let row = &res.results.wg_rankings[0].rows[0];
+        // approved + pending SZ count, rejected not: 40 s + 2 × 15 s.
+        assert_eq!(row.best_total_ms, Some(70_000));
     }
 
     #[test]

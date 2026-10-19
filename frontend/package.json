@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build && node -e \"const f='.vercel/output/functions/_render.func/.vc-config.json'; const fs=require('fs'); fs.writeFileSync(f, fs.readFileSync(f,'utf8').replace('nodejs18.x','nodejs24.x'))\"",
+    "build:judge": "vite build --config vite.judge.config.ts",
     "preview": "astro preview",
     "check": "astro check && tsc --noEmit",
     "test": "vitest run"
@@ -30,6 +31,7 @@
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "typescript": "^5.6.0",
+    "vite": "^5.4.21",
     "vitest": "2.1.9"
   }
 }
