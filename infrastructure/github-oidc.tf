@@ -5,6 +5,17 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
 
+# Subjects GitHub sends for runs on main. Repos created since 2026 use the
+# immutable form with owner and repo IDs (survives renames, can't be taken
+# over by a recreated repo of the same name); the name-only form is kept
+# in case the repo's OIDC setting is switched back.
+locals {
+  github_main_subjects = [
+    "repo:${var.github_repo_immutable}:ref:refs/heads/main",
+    "repo:${var.github_repo}:ref:refs/heads/main",
+  ]
+}
+
 # ---------------------------------------------------------------------------
 # Role 1: Lambda code deploy.
 # Used by .github/workflows/deploy-lambda.yaml on push to main.
@@ -25,7 +36,7 @@ data "aws_iam_policy_document" "github_actions_lambda_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/main"]
+      values   = local.github_main_subjects
     }
   }
 }
@@ -72,7 +83,7 @@ data "aws_iam_policy_document" "github_actions_terraform_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/main"]
+      values   = local.github_main_subjects
     }
   }
 }
