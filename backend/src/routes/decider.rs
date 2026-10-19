@@ -521,11 +521,40 @@ pub struct StationDeciderState {
     /// Stations the current discipline allows. Empty when no discipline
     /// is on the lane (the client then shows "waiting for organiser").
     pub allowed_stations: Vec<StationKind>,
+    /// NEW (PR 2): penalties of the current runs, oldest first — only
+    /// those of `?station=` when given. Lets the judge app show the
+    /// review status (pending / approved / rejected) of its own entries.
+    pub penalties: Vec<Penalty>,
+}
+
+/// Query of the station state endpoint.
+#[derive(Debug, Default, Deserialize)]
+pub struct StationStateQuery {
+    /// Judge's station; restricts `penalties` to that station.
+    #[serde(default)]
+    pub station: Option<StationKind>,
+}
+
+/// Penalties shown to a judge: only those of the current runs and —
+/// when `station` is given — of that station, ordered by `created_at`.
+pub fn current_station_penalties(
+    all: Vec<Penalty>,
+    current_ids: &[Uuid],
+    station: Option<StationKind>,
+) -> Vec<Penalty> {
+    let mut out: Vec<Penalty> = all
+        .into_iter()
+        .filter(|p| current_ids.contains(&p.run_id))
+        .filter(|p| station.is_none_or(|s| p.station == Some(s)))
+        .collect();
+    out.sort_by_key(|p| p.created_at);
+    out
 }
 
 pub async fn station_state_endpoint(
     State(state): State<AppState>,
     Path((owner_sub, token)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<StationStateQuery>,
 ) -> AppResult<Json<StationDeciderState>> {
     let (event, current_disc) = authorize_station(&state, &owner_sub, &token).await?;
 
@@ -544,6 +573,7 @@ pub async fn station_state_endpoint(
             current_runs: Vec::new(),
             disabled: true,
             allowed_stations: Vec::new(),
+            penalties: Vec::new(),
         }));
     };
 
@@ -558,11 +588,21 @@ pub async fn station_state_endpoint(
             current_runs: Vec::new(),
             disabled: true,
             allowed_stations: allowed,
+            penalties: Vec::new(),
         }));
     }
 
     let current_runs = load_current_runs(&state, &event, &disc).await?;
     let current_run = current_runs.first().cloned();
+    let penalties = if current_runs.is_empty() {
+        Vec::new()
+    } else {
+        current_station_penalties(
+            penalties::list_for_discipline(&state.db, event.id, disc.id).await?,
+            &event.current_run_ids,
+            query.station,
+        )
+    };
 
     Ok(Json(StationDeciderState {
         event: public_event,
@@ -571,6 +611,7 @@ pub async fn station_state_endpoint(
         current_runs,
         disabled: false,
         allowed_stations: allowed,
+        penalties,
     }))
 }
 
