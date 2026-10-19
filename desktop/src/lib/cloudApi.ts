@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { IS_TAURI } from "./tauri";
 import type {
+  CatalogueItem,
   CloudEvent,
   CloudIdentity,
   DisciplineListItem,
@@ -10,8 +11,12 @@ import type {
   EventSummary,
   FailedPost,
   OpenKidoResult,
+  RecordOutcome,
+  RunDivergence,
   RunStatus,
+  SyncMode,
 } from "./cloudTypes";
+import type { ResultsResponse } from "./results";
 
 export const CLOUD_EVENT = "kido://cloud-event";
 
@@ -50,11 +55,46 @@ export async function cloudListDisciplines(): Promise<DisciplineListItem[]> {
   return invoke<DisciplineListItem[]>("cloud_list_disciplines");
 }
 
+/** Load a discipline. `mode` = effective sync mode (web default +
+ *  desktop override); local results recorded earlier are kept. */
 export async function cloudSelectDiscipline(
   id: string,
+  mode: SyncMode | null,
 ): Promise<DisciplinePayload> {
   if (!IS_TAURI) return requireDesktop("Wettkampfauswahl");
-  return invoke<DisciplinePayload>("cloud_select_discipline", { id });
+  return invoke<DisciplinePayload>("cloud_select_discipline", { id, mode });
+}
+
+/** Apply the effective sync mode to the loaded discipline. */
+export async function cloudSetSyncMode(mode: SyncMode): Promise<void> {
+  if (!IS_TAURI) return;
+  await invoke("cloud_set_sync_mode", { mode });
+}
+
+export async function cloudDivergences(): Promise<RunDivergence[]> {
+  if (!IS_TAURI) return [];
+  return invoke<RunDivergence[]>("cloud_divergences");
+}
+
+/** `upload = true`: lokale Ergebnisse hochladen, sonst verwerfen. */
+export async function cloudResolveDivergence(upload: boolean): Promise<void> {
+  if (!IS_TAURI) return;
+  await invoke("cloud_resolve_divergence", { upload });
+}
+
+export async function cloudTakeStartupWarning(): Promise<string | null> {
+  if (!IS_TAURI) return null;
+  return invoke<string | null>("cloud_take_startup_warning");
+}
+
+export async function computeResults(): Promise<ResultsResponse> {
+  if (!IS_TAURI) return requireDesktop("Ergebnisse");
+  return invoke<ResultsResponse>("compute_results");
+}
+
+export async function kidoCatalogue(): Promise<CatalogueItem[]> {
+  if (!IS_TAURI) return [];
+  return invoke<CatalogueItem[]>("kido_catalogue");
 }
 
 export async function cloudDeselect(): Promise<void> {
@@ -67,22 +107,26 @@ export async function cloudSnapshot(): Promise<DisciplinePayload | null> {
   return invoke<DisciplinePayload | null>("cloud_snapshot");
 }
 
-export interface PostRunArgs {
-  disciplineId: string;
-  runId: string;
-  runNumber: number;
+export interface RecordLaneArgs {
+  /** Desktop lane 1-based (= timer channel). */
+  lane: number;
+  /** Operator overrides lane → run id. */
+  overrides: Record<number, string>;
   status: RunStatus;
   originalTimeMs?: number | null;
   startedAt?: string | null;
   endedAt?: string | null;
 }
 
-export async function cloudPostRunStatus(args: PostRunArgs): Promise<boolean> {
-  if (!IS_TAURI) return false;
-  return invoke<boolean>("cloud_post_run_status", {
-    disciplineId: args.disciplineId,
-    runId: args.runId,
-    runNumber: args.runNumber,
+/** Record a lane timing change: always stored locally (persisted),
+ *  posted to the web when the effective mode is live. */
+export async function cloudRecordLaneStatus(
+  args: RecordLaneArgs,
+): Promise<RecordOutcome> {
+  if (!IS_TAURI) return { runId: null, posted: false };
+  return invoke<RecordOutcome>("cloud_record_lane_status", {
+    lane: args.lane,
+    overrides: args.overrides,
     status: args.status,
     originalTimeMs: args.originalTimeMs ?? null,
     startedAt: args.startedAt ?? null,

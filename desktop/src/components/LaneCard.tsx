@@ -6,6 +6,8 @@ import { statusLabelDE, t } from "../lib/i18n";
 interface Props {
   lane: number;
   channel: ChannelDto;
+  /** Team / run currently assigned to this lane, if any. */
+  caption?: string | null;
   correctionMs: number;
   selected: boolean;
   onSelect: () => void;
@@ -18,6 +20,7 @@ const HISTORY_POINTS = 80;
 export function LaneCard({
   lane,
   channel,
+  caption,
   correctionMs,
   selected,
   onSelect,
@@ -91,6 +94,11 @@ export function LaneCard({
             <span className="text-ink-300/80">{t.lanes.laneShort}</span>
             <span className="ml-1">{lane}</span>
           </span>
+          {caption && (
+            <span className="max-w-[16rem] truncate font-display text-[15px] text-ink-100">
+              {caption}
+            </span>
+          )}
           {selected && (
             <span className="pill border border-ink-50/15 bg-ink-50/5 text-ink-50">
               <span className="h-1.5 w-1.5 rounded-full bg-white" />

@@ -126,7 +126,10 @@ export const t = {
     noCompetitions: "Keine Wettkämpfe gefunden",
     activeBadge: "Aktiv",
     liveBadge: "Live",
-    offlineBadge: "Offline",
+    offlineBadge: "On-prem",
+    overriddenBadge: "Desktop",
+    overriddenHint: (webDefault: string) =>
+      `Vom Desktop überschrieben (Standard im Web: ${webDefault})`,
     pickAction: "Auswählen",
     deselect: "Auswahl aufheben",
     openKido: "KiDo-Datei öffnen …",
@@ -155,13 +158,82 @@ export const t = {
     runLabel: "Lauf",
     statusActive: "Aktiv",
     statusPending: "Wartend",
+    statusCompleted: "Beendet",
     wgFilter: "Wertungsgruppe",
     wgFilterAll: "Alle",
     penaltyCount: (n: number) =>
-      n === 1 ? "1 Strafe" : `${n} Strafen`,
-    dq: "DQ",
+      n === 1 ? "1 Fehler" : `${n} Fehler`,
+    dq: "FV",
+    fromWeb: "vom Web",
     penaltyHint:
-      "Strafen werden im Web-Frontend des Organisators bestätigt (Bulk-Approve pro Lauf).",
+      "Fehler werden vom Organisator bestätigt bzw. zurückgenommen (Übernehmen pro Lauf).",
+  },
+
+  syncMode: {
+    label: "Betriebsart",
+    live: "Live",
+    onPrem: "On-prem",
+    liveHint: "Zeiten werden live an ki-do.it übertragen.",
+    onPremHint:
+      "Desktop ist Master: Zeiten bleiben lokal (gesichert) und werden per KiDo-Datei oder später per Upload übertragen.",
+    webDefault: "Standard aus dem Web",
+    resetToDefault: "Auf Web-Standard zurücksetzen",
+  },
+
+  penalties: {
+    title: "Fehler",
+    none: "Keine Fehler gemeldet",
+    sz: "SZ",
+    fv: "FV",
+    provisionalNote: "vorläufig — offene Fehler zählen bis zur Entscheidung",
+    snapshotNote:
+      "Der Snapshot enthält nur bestätigte Fehler; offene/zurückgenommene erscheinen nach der Übernahme.",
+  },
+
+  divergence: {
+    title: "Lokale Ergebnisse weichen ab",
+    body: "Auf diesem Desktop wurden Ergebnisse erfasst, die im Web noch nicht (oder anders) vorliegen. Die Live-Übertragung ist angehalten, bis du entscheidest.",
+    run: "Lauf",
+    local: "Lokal",
+    web: "Web",
+    missing: "fehlt im Web",
+    upload: "Lokale Ergebnisse hochladen",
+    discard: "Lokale Änderungen verwerfen",
+    discardConfirm:
+      "Wirklich verwerfen? Die lokal erfassten Zeiten gehen verloren (Tipp: vorher KiDo-Datei exportieren).",
+    discardConfirmAction: "Ja, verwerfen",
+    busy: "Bitte warten …",
+    todo: "Hinweis: Fehler und Besetzungen werden in dieser Version nicht hochgeladen — nur Laufzeiten.",
+  },
+
+  results: {
+    title: "Ergebnisse",
+    kicker: "Wertung",
+    open: "Ergebnisse & Druck",
+    refresh: "Neu berechnen",
+    print: "Drucken",
+    back: "Zurück",
+    empty: "Noch keine Wertung — kein Team mit Wertungsgruppe.",
+    noDiscipline: "Erst Wettkampf laden.",
+    tagessieger: "Tagessieger",
+    tagessiegerHint: "GW-Zeit = Zeit × (1 − 2·(18 − Ø Alter)/100); Alter am Wettkampftag.",
+    colPlace: "Platz",
+    colStart: "Start-Nr.",
+    colTeam: "Mannschaft",
+    colRun: (n: number) => `Lauf ${n}`,
+    colBest: "Wertung",
+    colNote: "Bemerkung",
+    colWg: "WG",
+    colTime: "Zeit",
+    colAvgAge: "Ø Alter",
+    colFactor: "Faktor",
+    colGw: "GW-Zeit",
+    provisional: "Vorläufig — es gibt noch offene Fehler.",
+    legend: "Zeiten in Sekunden (1/100 s) · H = Handzeit · * = vorläufig · FV = Fehlversuch (ungültig)",
+    missingWg: (names: string) => `Ohne Wertungsgruppe, nicht gewertet: ${names}`,
+    printedAt: "Gedruckt",
+    page: "Seite",
+    noTagessieger: "Noch kein gültiger Lauf.",
   },
 
   banner: {
@@ -172,7 +244,9 @@ export const t = {
     lane: "Bahn",
     runner: "Läufer:in",
     syncLive: "Live-Übertragung an ki-do.it",
-    syncOffline: "Offline-Modus — keine Übertragung",
+    syncOffline: "On-prem — Ergebnisse werden lokal gesichert, keine Übertragung",
+    currentRuns: "Aktuelle Läufe",
+    handTime: "Handzeit",
     closeSnapshot: "Wettkampf schließen",
   },
 
@@ -304,7 +378,7 @@ export function wgLabelDE(wg: string): string {
 export function wgDescriptionDE(wg: string): string {
   switch (wg) {
     case "wg1":
-      return "Jungen + Mädchen 8-10 (gemischt)";
+      return "Jungen + Mädchen 8–10 (gemischt)";
     case "wg2":
       return "Jungen bis 14";
     case "wg3":
@@ -318,48 +392,40 @@ export function wgDescriptionDE(wg: string): string {
   }
 }
 
-/** Label einer Strafrichter-Station. */
+/** Label einer Wertungsrichter-Station (kanonische Keys + Alt-Aliase). */
 export function stationLabelDE(station: string): string {
   switch (station) {
+    case "startlinie":
     case "start":
-      return "Start";
+      return "Startlinie/Zeitnehmer";
+    case "verteilerlinie":
     case "verteiler":
-      return "Verteiler";
-    case "strahlrohr":
-      return "Strahlrohr";
-    case "knoten":
-      return "Knoten";
-    case "kuebelspritze":
-      return "Kübelspritze";
-    case "podest":
-      return "Podest";
+      return "Verteilerlinie";
     case "strahlrohrlinie":
+    case "strahlrohr":
       return "Strahlrohrlinie";
+    case "knotengestell":
+    case "knoten":
+      return "Knotengestell";
+    case "angriffslinie":
+    case "kuebelspritze":
+      return "Angriffslinie";
+    case "podest":
+      return "Podest/Wasserbehälter";
     default:
       return station;
   }
 }
 
-/**
- * Disziplin-Bezeichnung für die UI. Mappt sowohl die neuen
- * disziplinspezifischen Werte (`gruppenstaffette`, `loeschangriff`) als auch
- * die historischen TimerMode-Werte aus dem Web-Backend, solange der
- * Schema-Bump dort noch nicht ausgerollt ist.
- */
-export function modeLabelDE(mode: string): string {
+/** Disziplin-Bezeichnung für die UI, optional mit Bahnenzahl. */
+export function modeLabelDE(mode: string, laneCount?: number): string {
+  const lanes =
+    laneCount == null ? "" : laneCount === 1 ? " (1 Bahn)" : ` (${laneCount} Bahnen)`;
   switch (mode) {
     case "gruppenstaffette":
-      return "Gruppenstaffette (2 Bahnen)";
+      return `Gruppenstafette${lanes}`;
     case "loeschangriff":
-      return "Löschangriff (4 Bahnen)";
-    case "single_lane":
-      return "Gruppenstaffette (Einzelbahn)";
-    case "two_lane_parallel":
-      return "Gruppenstaffette (2 Bahnen)";
-    case "relay":
-      return "Gruppenstaffette";
-    case "individual":
-      return "Löschangriff";
+      return `Löschangriff${lanes}`;
     default:
       return mode;
   }

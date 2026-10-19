@@ -287,3 +287,91 @@
     text-shadow: var(--time-shadow-confirmed);
   }
 }
+
+/* ------------------------------------------------------------------------- */
+/*  Print (results): A4, one WG per page, Tagessieger on its own page.       */
+/*  No external fonts — system font stacks only (venues have no internet).   */
+/* ------------------------------------------------------------------------- */
+.print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm 14mm 12mm;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body {
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Arial, sans-serif;
+    font-size: 10pt;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  /* Let the app shell and scroll containers grow with the content. */
+  .app-shell,
+  .app-shell main,
+  .results-root,
+  .results-scroll {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print-page {
+    break-after: page;
+    page-break-after: always;
+    margin: 0 !important;
+  }
+  .print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  .results-section h2,
+  .results-section h2 span,
+  .results-section p {
+    color: #000 !important;
+  }
+
+  .results-table {
+    border-collapse: collapse !important;
+    font-size: 9.5pt;
+  }
+  .results-table thead {
+    display: table-header-group; /* repeat header on overflow pages */
+  }
+  .results-table tr {
+    break-inside: avoid;
+  }
+  .results-table th,
+  .results-table td {
+    color: #000 !important;
+    border-bottom: 0.5pt solid #888 !important;
+    padding: 2pt 4pt !important;
+    font-family: inherit !important;
+  }
+  .results-table th {
+    border-bottom: 1pt solid #000 !important;
+    font-size: 8pt;
+    letter-spacing: 0.04em;
+  }
+}

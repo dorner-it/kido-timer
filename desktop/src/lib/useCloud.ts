@@ -1,23 +1,29 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import {
   cloudClear,
   cloudClearFailedPost,
   cloudDeselect,
+  cloudDivergences,
   cloudExportKido,
   cloudFailedPosts,
   cloudIdentity,
   cloudListDisciplines,
   cloudOpenKido,
   cloudPair,
-  cloudPostRunStatus,
+  cloudRecordLaneStatus,
+  cloudResolveDivergence,
   cloudRetryPost,
   cloudSelectDiscipline,
+  cloudSetSyncMode,
   cloudSnapshot,
+  cloudTakeStartupWarning,
+  kidoCatalogue,
   listenCloudEvents,
   pickKidoFile,
-  type PostRunArgs,
+  type RecordLaneArgs,
 } from "./cloudApi";
 import type {
+  CatalogueItem,
   CloudEvent,
   CloudIdentity,
   DisciplineListItem,
@@ -25,8 +31,16 @@ import type {
   FailedPost,
   KidoConflict,
   OpenKidoResult,
-  Run,
+  RunDivergence,
+  SyncMode,
 } from "./cloudTypes";
+import {
+  loadSyncOverrides,
+  saveSyncOverrides,
+  snapshotSyncMode,
+  withOverride,
+  type SyncOverrides,
+} from "./syncMode";
 
 interface State {
   identity: CloudIdentity | null;
@@ -38,6 +52,11 @@ interface State {
   failedPosts: FailedPost[];
   /** Operator overrides — desktop lane (1..4) → run_id (UUID). */
   laneOverrides: Record<number, string>;
+  /** Local results that differ from the web (live mode blocked). */
+  divergences: RunDivergence[];
+  /** Desktop sync-mode overrides per discipline id. */
+  syncOverrides: SyncOverrides;
+  catalogue: CatalogueItem[];
 }
 
 type Action =
@@ -49,19 +68,26 @@ type Action =
   | { type: "setResultMessage"; message: string | null }
   | { type: "setFailedPosts"; failures: FailedPost[] }
   | { type: "setLaneOverride"; lane: number; runId: string | null }
-  | { type: "clearLaneOverrides" }
+  | { type: "setDivergences"; divergences: RunDivergence[] }
+  | { type: "setSyncOverrides"; overrides: SyncOverrides }
+  | { type: "setCatalogue"; catalogue: CatalogueItem[] }
   | { type: "cleared" };
 
-const INITIAL: State = {
-  identity: null,
-  snapshot: null,
-  disciplines: [],
-  loading: false,
-  error: null,
-  lastResultMessage: null,
-  failedPosts: [],
-  laneOverrides: {},
-};
+function initialState(): State {
+  return {
+    identity: null,
+    snapshot: null,
+    disciplines: [],
+    loading: false,
+    error: null,
+    lastResultMessage: null,
+    failedPosts: [],
+    laneOverrides: {},
+    divergences: [],
+    syncOverrides: loadSyncOverrides(),
+    catalogue: [],
+  };
+}
 
 function reducer(s: State, a: Action): State {
   switch (a.type) {
@@ -95,22 +121,34 @@ function reducer(s: State, a: Action): State {
       else delete next[a.lane];
       return { ...s, laneOverrides: next };
     }
-    case "clearLaneOverrides":
-      return { ...s, laneOverrides: {} };
+    case "setDivergences":
+      return { ...s, divergences: a.divergences };
+    case "setSyncOverrides":
+      return { ...s, syncOverrides: a.overrides };
+    case "setCatalogue":
+      return { ...s, catalogue: a.catalogue };
     case "cleared":
-      return { ...INITIAL };
+      // Unpairing keeps the loaded discipline (local results stay); Rust
+      // re-emits the snapshot right after.
+      return {
+        ...initialState(),
+        snapshot: s.snapshot,
+        laneOverrides: s.laneOverrides,
+        catalogue: s.catalogue,
+        divergences: [],
+      };
   }
 }
 
 export function useCloud() {
-  const [state, dispatch] = useReducer(reducer, INITIAL);
-  const snapshotRef = useRef<DisciplinePayload | null>(null);
+  const [state, dispatch] = useReducer(reducer, undefined, initialState);
   const overridesRef = useRef<Record<number, string>>({});
+  const syncOverridesRef = useRef<SyncOverrides>(state.syncOverrides);
 
   useEffect(() => {
-    snapshotRef.current = state.snapshot;
     overridesRef.current = state.laneOverrides;
-  }, [state.snapshot, state.laneOverrides]);
+    syncOverridesRef.current = state.syncOverrides;
+  }, [state.laneOverrides, state.syncOverrides]);
 
   useEffect(() => {
     let mounted = true;
@@ -124,6 +162,15 @@ export function useCloud() {
     });
     cloudFailedPosts().then((f) => {
       if (mounted) dispatch({ type: "setFailedPosts", failures: f });
+    });
+    cloudDivergences().then((d) => {
+      if (mounted) dispatch({ type: "setDivergences", divergences: d });
+    });
+    cloudTakeStartupWarning().then((w) => {
+      if (mounted && w) dispatch({ type: "setError", error: w });
+    });
+    kidoCatalogue().then((c) => {
+      if (mounted) dispatch({ type: "setCatalogue", catalogue: c });
     });
 
     listenCloudEvents((event: CloudEvent) => {
@@ -157,6 +204,9 @@ export function useCloud() {
         case "failedPostsChanged":
           dispatch({ type: "setFailedPosts", failures: event.failures });
           break;
+        case "divergenceChanged":
+          dispatch({ type: "setDivergences", divergences: event.divergences });
+          break;
       }
     }).then((u) => {
       unlisten = u;
@@ -167,6 +217,19 @@ export function useCloud() {
       unlisten?.();
     };
   }, []);
+
+  const effectiveMode = useMemo(
+    () => snapshotSyncMode(state.snapshot, state.syncOverrides),
+    [state.snapshot, state.syncOverrides],
+  );
+
+  // Tell the Rust side whenever the loaded discipline or its effective
+  // mode changes (also covers the restore after an app restart).
+  const disciplineId = state.snapshot?.discipline.id ?? null;
+  useEffect(() => {
+    if (!disciplineId || !effectiveMode) return;
+    void cloudSetSyncMode(effectiveMode);
+  }, [disciplineId, effectiveMode]);
 
   const pair = useCallback(async (baseUrl: string, apiKey: string) => {
     dispatch({ type: "setLoading", loading: true });
@@ -205,7 +268,9 @@ export function useCloud() {
     dispatch({ type: "setLoading", loading: true });
     dispatch({ type: "setError", error: null });
     try {
-      const snapshot = await cloudSelectDiscipline(id);
+      // `null` → Rust uses the web default.
+      const mode = syncOverridesRef.current[id] ?? null;
+      const snapshot = await cloudSelectDiscipline(id, mode);
       dispatch({ type: "setSnapshot", snapshot });
       return snapshot;
     } catch (e) {
@@ -219,6 +284,16 @@ export function useCloud() {
   const deselect = useCallback(async () => {
     await cloudDeselect();
     dispatch({ type: "setSnapshot", snapshot: null });
+    dispatch({ type: "setDivergences", divergences: [] });
+  }, []);
+
+  const adoptOpened = useCallback((result: OpenKidoResult) => {
+    if (!result.adopted) return;
+    dispatch({ type: "setSnapshot", snapshot: result.payload });
+    // Rust opens files as on-prem; apply the effective mode explicitly
+    // (the effect above does not fire when the discipline id is unchanged).
+    const mode = snapshotSyncMode(result.payload, syncOverridesRef.current);
+    if (mode) void cloudSetSyncMode(mode);
   }, []);
 
   const openKido = useCallback(async (): Promise<
@@ -230,9 +305,7 @@ export function useCloud() {
     dispatch({ type: "setError", error: null });
     try {
       const result = await cloudOpenKido(path, false);
-      if (result.adopted) {
-        dispatch({ type: "setSnapshot", snapshot: result.payload });
-      }
+      adoptOpened(result);
       return { path, result };
     } catch (e) {
       dispatch({ type: "setError", error: String(e) });
@@ -240,58 +313,45 @@ export function useCloud() {
     } finally {
       dispatch({ type: "setLoading", loading: false });
     }
-  }, []);
+  }, [adoptOpened]);
 
   const openKidoForce = useCallback(
     async (path: string): Promise<OpenKidoResult> => {
       const result = await cloudOpenKido(path, true);
-      if (result.adopted) {
-        dispatch({ type: "setSnapshot", snapshot: result.payload });
-      }
+      adoptOpened(result);
       return result;
     },
-    [],
+    [adoptOpened],
   );
 
   const exportKido = useCallback(async () => {
     if (!state.snapshot) return null;
     const date = state.snapshot.event.date;
-    const eventSlug = state.snapshot.event.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    const discSlug = state.snapshot.discipline.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    return cloudExportKido(`kido-${eventSlug || "export"}-${discSlug || "wettkampf"}-${date}.kido`);
+    const eventSlug = slug(state.snapshot.event.name);
+    const discSlug = slug(state.snapshot.discipline.name);
+    return cloudExportKido(
+      `kido-${eventSlug || "export"}-${discSlug || "wettkampf"}-${date}.kido`,
+    );
   }, [state.snapshot]);
 
   /**
-   * POST a run state change. Resolves the matching run_id from the current
-   * lane via overrides → active-on-lane → current_run_id. No-op if no run
-   * matches or no discipline is loaded.
+   * Record a lane timing change. The Rust side resolves the run (current
+   * runs → overrides → active run), stores it locally (persisted) and
+   * posts it when live. No-op without a loaded discipline.
    */
-  const postLaneStatus = useCallback(
+  const recordLaneStatus = useCallback(
     async (
       lane: number,
-      patch: Pick<PostRunArgs, "status" | "originalTimeMs" | "startedAt" | "endedAt">,
+      patch: Pick<RecordLaneArgs, "status" | "originalTimeMs" | "startedAt" | "endedAt">,
     ): Promise<void> => {
-      const snapshot = snapshotRef.current;
-      if (!snapshot) return;
-      if (snapshot.discipline.sync_mode !== "live") return;
-      const overrides = overridesRef.current;
-      const run = pickRunForLane(snapshot, lane, overrides);
-      if (!run) return;
       try {
-        await cloudPostRunStatus({
-          disciplineId: snapshot.discipline.id,
-          runId: run.id,
-          runNumber: run.run_number,
+        await cloudRecordLaneStatus({
+          lane,
+          overrides: overridesRef.current,
           ...patch,
         });
-      } catch {
-        /* events surface failure */
+      } catch (e) {
+        dispatch({ type: "setError", error: String(e) });
       }
     },
     [],
@@ -303,6 +363,30 @@ export function useCloud() {
     },
     [],
   );
+
+  /** Override (or reset with `null`) the sync mode of a discipline. */
+  const setSyncOverride = useCallback(
+    (disciplineId: string, webDefault: SyncMode, mode: SyncMode | null) => {
+      const next = withOverride(
+        syncOverridesRef.current,
+        disciplineId,
+        mode,
+        webDefault,
+      );
+      syncOverridesRef.current = next;
+      saveSyncOverrides(next);
+      dispatch({ type: "setSyncOverrides", overrides: next });
+    },
+    [],
+  );
+
+  const resolveDivergence = useCallback(async (upload: boolean) => {
+    try {
+      await cloudResolveDivergence(upload);
+    } catch (e) {
+      dispatch({ type: "setError", error: String(e) });
+    }
+  }, []);
 
   const retryFailedPost = useCallback(async (runId: string) => {
     try {
@@ -320,8 +404,13 @@ export function useCloud() {
     dispatch({ type: "setResultMessage", message: null });
   }, []);
 
+  const dismissError = useCallback(() => {
+    dispatch({ type: "setError", error: null });
+  }, []);
+
   return {
     state,
+    effectiveMode,
     pair,
     clear,
     refreshDisciplines,
@@ -330,62 +419,22 @@ export function useCloud() {
     openKido,
     openKidoForce,
     exportKido,
-    postLaneStatus,
+    recordLaneStatus,
     setLaneOverride,
+    setSyncOverride,
+    resolveDivergence,
     retryFailedPost,
     dismissFailedPost,
     dismissResultMessage,
+    dismissError,
   };
 }
 
 export type KidoConflictInfo = KidoConflict;
 
-/**
- * Pick the run that should receive a confirmed time on the given desktop lane.
- * Order: explicit operator override → active run on matching lane →
- * snapshot.event.current_run_id (if active and lane-compatible).
- */
-export function pickRunForLane(
-  snapshot: DisciplinePayload | null,
-  lane: number,
-  overrides: Record<number, string> = {},
-): Run | null {
-  if (!snapshot) return null;
-  const overrideId = overrides[lane];
-  if (overrideId) {
-    const r = snapshot.runs.find((x) => x.id === overrideId);
-    if (r) return r;
-  }
-  const active = snapshot.runs.find(
-    (r) => r.status === "active" && r.lane === lane,
-  );
-  if (active) return active;
-  if (snapshot.event.current_run_id) {
-    const r = snapshot.runs.find(
-      (x) => x.id === snapshot.event.current_run_id && x.status === "active",
-    );
-    if (r && (r.lane === null || r.lane === lane)) return r;
-  }
-  return null;
-}
-
-export function teamForRun(
-  snapshot: DisciplinePayload | null,
-  runId: string | null | undefined,
-) {
-  if (!snapshot || !runId) return null;
-  const run = snapshot.runs.find((r) => r.id === runId);
-  if (!run) return null;
-  const team = snapshot.teams.find((t) => t.id === run.team_id) ?? null;
-  return { run, team };
-}
-
-export function runnerForRun(
-  snapshot: DisciplinePayload | null,
-  runId: string | null | undefined,
-) {
-  if (!snapshot || !runId) return null;
-  const run = snapshot.runs.find((r) => r.id === runId);
-  if (!run || !run.runner_id) return null;
-  return snapshot.runners.find((r) => r.id === run.runner_id) ?? null;
+function slug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }

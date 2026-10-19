@@ -16,6 +16,7 @@ interface Props {
   onDisconnect: () => void;
   onReset: () => void;
   onOpenProtocol: () => void;
+  onOpenResults: () => void;
   cloudIdentity: CloudIdentity | null;
   cloudSnapshot: DisciplinePayload | null;
   cloudLoading: boolean;
@@ -43,6 +44,7 @@ export function Drawer({
   onDisconnect,
   onReset,
   onOpenProtocol,
+  onOpenResults,
   cloudIdentity,
   cloudSnapshot,
   cloudLoading,
@@ -77,7 +79,7 @@ export function Drawer({
         aria-hidden
         onClick={onClose}
         className={[
-          "fixed inset-0 z-30 bg-ink-900/60 backdrop-blur-sm transition-opacity duration-300",
+          "no-print fixed inset-0 z-30 bg-ink-900/60 backdrop-blur-sm transition-opacity duration-300",
           open ? "opacity-100" : "pointer-events-none opacity-0",
         ].join(" ")}
       />
@@ -86,7 +88,7 @@ export function Drawer({
       <aside
         aria-hidden={!open}
         className={[
-          "fixed right-0 top-0 z-40 flex h-full w-[380px] flex-col bg-ink-800/95 shadow-2xl ring-1 ring-ink-50/[0.06] backdrop-blur",
+          "no-print fixed right-0 top-0 z-40 flex h-full w-[380px] flex-col bg-ink-800/95 shadow-2xl ring-1 ring-ink-50/[0.06] backdrop-blur",
           "transition-transform duration-300 ease-out",
           open ? "translate-x-0" : "translate-x-full",
         ].join(" ")}
@@ -161,6 +163,15 @@ export function Drawer({
               onClick={onOpenProtocol}
             >
               <span>📋 {t.drawer.openProtocol}</span>
+              <span className="font-mono text-[10px] tracking-[0.2em]">→</span>
+            </button>
+            <button
+              className="btn justify-between"
+              onClick={onOpenResults}
+              disabled={!cloudSnapshot}
+              title={!cloudSnapshot ? t.results.noDiscipline : undefined}
+            >
+              <span>🏆 {t.results.open}</span>
               <span className="font-mono text-[10px] tracking-[0.2em]">→</span>
             </button>
           </Section>

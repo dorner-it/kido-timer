@@ -7,7 +7,7 @@ import type {
   TeamEntry,
   Wertungsgruppe,
 } from "../lib/cloudTypes";
-import { pickRunForLane } from "../lib/useCloud";
+import { laneCountFor, resolveLane } from "../lib/lanes";
 
 interface Props {
   snapshot: DisciplinePayload;
@@ -15,18 +15,15 @@ interface Props {
   onSetOverride: (lane: number, runId: string | null) => void;
 }
 
-const LANE_COUNT = 4;
-
 /**
- * Lane-assignment panel for the desktop operator. Auto-binding only fits
- * the simple modes (single lane / two-lane parallel); for relay-style modes
- * the operator picks which run is on each physical lane.
+ * Lane-assignment panel for the desktop operator: one row per lane of the
+ * discipline (`lane_count`). Lanes with a current run set on the web
+ * (`current_run_ids`) are shown read-only ("vom Web"); for the others the
+ * operator can pick the run (override), else the active run on the lane
+ * is used.
  *
- * Schema v3 additions:
  * - Optional WG filter (only shown if any team_entry carries a `wg`).
- * - WG badge per lane (next to team/runner hint).
- * - Approved-penalty count + DQ marker per lane (lit from
- *   `snapshot.approved_penalties` matched by `run_id`).
+ * - WG badge per lane, error count + FV marker per lane.
  */
 export function LaneAssignmentPanel({
   snapshot,
@@ -54,14 +51,8 @@ export function LaneAssignmentPanel({
       .sort((a, b) => a.run_number - b.run_number);
   }, [snapshot.runs, snapshot.team_entries, snapshot.discipline.id, wgFilter]);
 
-  // Hide the lane-picker for the simple modes — auto-binding by lane works
-  // there. WG filter still gets rendered if there are WGs to show.
-  const mode = snapshot.discipline.mode;
-  const isSimple = mode === "single_lane" || mode === "two_lane_parallel";
-  if (isSimple && wgOptions.length === 0) {
-    return null;
-  }
-  if (!isSimple && eligibleRuns.length === 0 && !wgFilter) return null;
+  const laneCount = laneCountFor(snapshot);
+  if (eligibleRuns.length === 0 && !wgFilter) return null;
 
   return (
     <section className="mx-7 mt-3 rounded-2xl border border-ink-50/[0.05] bg-ink-700/40 px-5 py-4">
@@ -95,14 +86,17 @@ export function LaneAssignmentPanel({
         )}
       </header>
 
-      {!isSimple && (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-          {Array.from({ length: LANE_COUNT }, (_, i) => i + 1).map((lane) => {
-            const overrideId = laneOverrides[lane] ?? null;
-            const auto = pickRunForLane(snapshot, lane, {});
-            const selected = overrideId
-              ? eligibleRuns.find((r) => r.id === overrideId) ?? null
-              : auto;
+      <div
+          className={[
+            "grid grid-cols-1 gap-2",
+            laneCount > 1 ? "md:grid-cols-2" : "",
+          ].join(" ")}
+        >
+          {Array.from({ length: laneCount }, (_, i) => i + 1).map((lane) => {
+            const resolved = resolveLane(snapshot, lane, laneOverrides);
+            const fromWeb = resolved?.source === "current";
+            const overrideId = fromWeb ? null : laneOverrides[lane] ?? null;
+            const selected = resolved?.run ?? null;
             return (
               <div
                 key={lane}
@@ -111,30 +105,35 @@ export function LaneAssignmentPanel({
                 <span className="w-12 shrink-0 font-mono text-[11px] uppercase tracking-[0.2em] text-ink-200/70">
                   {t.laneAssign.laneShort} {lane}
                 </span>
-                <select
-                  value={overrideId ?? ""}
-                  onChange={(e) =>
-                    onSetOverride(lane, e.target.value || null)
-                  }
-                  className="input flex-1 text-[12px]"
-                >
-                  <option value="">{t.laneAssign.auto}</option>
-                  {eligibleRuns.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {labelForRun(snapshot, r)}
-                    </option>
-                  ))}
-                </select>
+                {fromWeb ? (
+                  <span className="flex-1 truncate font-mono text-[11px] text-ink-100">
+                    {selected ? labelForRun(snapshot, selected) : ""}
+                  </span>
+                ) : (
+                  <select
+                    value={overrideId ?? ""}
+                    onChange={(e) =>
+                      onSetOverride(lane, e.target.value || null)
+                    }
+                    className="input flex-1 text-[12px]"
+                  >
+                    <option value="">{t.laneAssign.auto}</option>
+                    {eligibleRuns.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {labelForRun(snapshot, r)}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <RunHint
                   snapshot={snapshot}
                   run={selected}
-                  isAuto={!overrideId}
+                  badge={fromWeb ? t.laneAssign.fromWeb : overrideId ? null : "auto"}
                 />
               </div>
             );
           })}
         </div>
-      )}
 
       {snapshot.approved_penalties.length > 0 && (
         <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-200/50">
@@ -156,11 +155,11 @@ function collectWgs(entries: TeamEntry[]): Wertungsgruppe[] {
 function RunHint({
   snapshot,
   run,
-  isAuto,
+  badge,
 }: {
   snapshot: DisciplinePayload;
   run: Run | null;
-  isAuto: boolean;
+  badge: string | null;
 }) {
   if (!run) {
     return (
@@ -176,14 +175,16 @@ function RunHint({
   const entry = snapshot.team_entries.find(
     (e) => e.team_id === run.team_id && e.discipline_id === run.discipline_id,
   );
-  const penalties = penaltiesForRun(snapshot.approved_penalties, run.id);
-  const dq = penalties.some((p) => p.is_disqualification);
-  const counted = penalties.filter((p) => !p.is_disqualification).length;
+  const penalties = penaltiesForRun(snapshot.approved_penalties, run.id).filter(
+    (p) => p.status !== "rejected",
+  );
+  const dq = penalties.some((p) => p.kind === "fv");
+  const counted = penalties.filter((p) => p.kind === "sz").length;
 
   return (
     <div className="flex shrink-0 items-center gap-1.5 truncate max-w-[55%]">
       <span className="font-mono text-[10px] tracking-wider text-ink-200/70 truncate">
-        {isAuto ? "auto · " : ""}
+        {badge ? `${badge} · ` : ""}
         {team?.name ?? "?"}
         {runner ? ` · ${runner.first_name} ${runner.last_name}` : ""}
       </span>
@@ -234,7 +235,11 @@ function labelForRun(snapshot: DisciplinePayload, r: Run): string {
   if (runner) parts.push(`${runner.first_name} ${runner.last_name}`);
   if (r.lane != null) parts.push(`${t.laneAssign.laneShort} ${r.lane}`);
   parts.push(
-    r.status === "active" ? t.laneAssign.statusActive : t.laneAssign.statusPending,
+    r.status === "active"
+      ? t.laneAssign.statusActive
+      : r.status === "completed"
+        ? t.laneAssign.statusCompleted
+        : t.laneAssign.statusPending,
   );
   return parts.join(" · ");
 }

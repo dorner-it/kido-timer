@@ -1,43 +1,37 @@
 /**
- * Disziplin-Bezeichner (Schema v3+). Während des Web-Schema-Rollouts kann
- * das Backend kurzzeitig noch alte v2-Werte liefern; der Helper
- * `modeLabelDE` in `i18n.ts` mappt beide.
+ * Wire types of the desktop ⇄ web contract, **schema v4**
+ * (Gruppenstafette 2027, `docs/contract-pr1-2027.md`). Mirrors
+ * `src-tauri/src/cloud/types.rs`; enum values come from `kido-core`.
+ * The Rust side applies the read-time migration (defaults), so every
+ * field below is present when it reaches the UI.
  */
-export type TimerMode =
-  | "gruppenstaffette"
-  | "loeschangriff"
-  // Legacy v2-Werte — werden vom alten Backend weiter geliefert, bis die
-  // DDB-Migration durchläuft.
-  | "single_lane"
-  | "two_lane_parallel"
-  | "relay"
-  | "individual";
 
+/** Disziplin. Legacy-Werte (`single_lane` …) werden abgelehnt. */
+export type TimerMode = "gruppenstaffette" | "loeschangriff";
+
+/** `offline` = On-prem (Desktop ist Master, keine Cloud-Übertragung). */
 export type SyncMode = "live" | "offline";
+export type JudgeMode = "per_station" | "per_station_and_lane";
 export type RunStatus = "pending" | "active" | "completed" | "cancelled";
 export type PenaltyStatus = "pending" | "approved" | "rejected";
+/** SZ = +15 s, FV = Lauf ungültig. */
+export type PenaltyKind = "sz" | "fv";
+export type TimeSource = "lichtschranke" | "handstopp";
+export type LineupConfirmedBy = "startlinie" | "organizer";
 
 export type Gender = "male" | "female";
 
-/**
- * Feste Wertungsgruppen aus Alter + Geschlecht des Roster:
- * - WG1: Jungen + Mädchen 8-10 (gemischt)
- * - WG2: Jungen bis 14
- * - WG3: Mädchen bis 14
- * - WG4: Jungen bis 18
- * - WG5: Mädchen bis 18
- */
+/** Vom Verein angekreuzt (nie abgeleitet). */
 export type Wertungsgruppe = "wg1" | "wg2" | "wg3" | "wg4" | "wg5";
 
-/** Stationen, an denen Strafrichter Strafen melden können. */
+/** Kanonische Stations-Schlüssel (Ausgabe des Backends). */
 export type StationKind =
-  | "start"
-  | "verteiler"
-  | "strahlrohr"
-  | "knoten"
-  | "kuebelspritze"
-  | "podest"          // nur Löschangriff
-  | "strahlrohrlinie"; // nur Löschangriff
+  | "startlinie"
+  | "verteilerlinie"
+  | "strahlrohrlinie"
+  | "knotengestell"
+  | "angriffslinie"
+  | "podest";
 
 export interface CloudIdentity {
   baseUrl: string;
@@ -55,6 +49,7 @@ export interface EventSummary {
   is_active: boolean;
   current_discipline_id: string | null;
   current_run_id: string | null;
+  current_run_ids: string[];
 }
 
 export interface DisciplineListItem {
@@ -64,6 +59,9 @@ export interface DisciplineListItem {
   event_date: string;
   name: string;
   mode: TimerMode;
+  lane_count: number;
+  judge_mode: JudgeMode;
+  /** Standard aus dem Web; der Desktop kann ihn überschreiben. */
   sync_mode: SyncMode;
   /** True iff this discipline is the one selected on the active event's
    *  lane. The desktop usually pairs to this one. */
@@ -78,11 +76,12 @@ export interface ExportedEvent {
   location: string | null;
   is_active: boolean;
   current_discipline_id: string | null;
+  /** Legacy-Spiegel von `current_run_ids[0]`. */
   current_run_id: string | null;
+  /** Aktuelle Läufe — einer pro aktiver Bahn. */
+  current_run_ids: string[];
   created_at?: string | null;
   updated_at?: string | null;
-  /** Gemeinsamer Token für alle Strafrichter (Schema v3+). */
-  station_token?: string | null;
 }
 
 export interface Discipline {
@@ -90,6 +89,9 @@ export interface Discipline {
   event_id: string;
   name: string;
   mode: TimerMode;
+  /** Gruppenstafette 1 | 2, Löschangriff 4. */
+  lane_count: number;
+  judge_mode: JudgeMode;
   sync_mode: SyncMode;
   position: number;
   created_at?: string | null;
@@ -103,15 +105,23 @@ export interface Team {
   position: number;
 }
 
+export interface WgHistoryEntry {
+  from: Wertungsgruppe | null;
+  to: Wertungsgruppe;
+  by: string;
+  at: string;
+  note: string | null;
+}
+
 export interface TeamEntry {
   team_id: string;
   discipline_id: string;
   event_id: string;
   start_number: number;
   lane: number | null;
-  /** Aus Roster abgeleitete Wertungsgruppe; null bei Altbestand oder
-   *  inkonsistentem Roster. */
-  wg?: Wertungsgruppe | null;
+  /** `null` = „WG fehlt“ (Altbestand) — nicht in der Wertung. */
+  wg: Wertungsgruppe | null;
+  wg_history: WgHistoryEntry[];
 }
 
 export interface Runner {
@@ -122,7 +132,6 @@ export interface Runner {
   last_name: string;
   birth_date: string;
   position: number;
-  /** Pflichtfeld ab Schema v3 — additiv eingeführt (null bei Altbestand). */
   gender?: Gender | null;
 }
 
@@ -135,10 +144,18 @@ export interface Run {
   run_number: number;
   lane: number | null;
   status: RunStatus;
+  /** Lichtschranke oder Mittel der Handzeiten — Wertungsgrundlage. */
   original_time_ms: number | null;
+  /** Legacy, nur Anzeige — wird nie zur Wertung addiert. */
   correction_ms: number;
   started_at: string | null;
   ended_at: string | null;
+  lineup: string[];
+  lineup_confirmed_at: string | null;
+  lineup_confirmed_by: LineupConfirmedBy | null;
+  time_source: TimeSource;
+  hand_time_1_ms: number | null;
+  hand_time_2_ms: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -150,17 +167,18 @@ export interface Penalty {
   run_id: string;
   team_id: string;
   runner_id: string | null;
+  kind: PenaltyKind;
+  /** Katalog-Code, `null` bei Altbestand. */
+  code: string | null;
+  station: StationKind | null;
+  is_disqualification: boolean;
   decider_slot: number;
   delta_ms: number;
   reason_code: string | null;
   status: PenaltyStatus;
-  created_at: string;
+  created_at: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
-  /** Station, an der die Strafe gemeldet wurde (Schema v3+). */
-  station?: StationKind | null;
-  /** Bei Löschangriff: Disqualifikation statt Zeitstrafe. */
-  is_disqualification?: boolean;
 }
 
 export interface DisciplinePayload {
@@ -188,6 +206,17 @@ export interface FailedPost {
   failedAt: string;
 }
 
+/** Lokal erfasstes Ergebnis, das vom Web-Stand abweicht. */
+export interface RunDivergence {
+  runId: string;
+  runNumber: number;
+  teamId: string | null;
+  localStatus: RunStatus;
+  localTimeMs: number | null;
+  remoteStatus: RunStatus | null;
+  remoteTimeMs: number | null;
+}
+
 export interface KidoConflict {
   currentDisciplineId: string;
   currentDisciplineName: string;
@@ -201,11 +230,26 @@ export interface OpenKidoResult {
   conflict?: KidoConflict | null;
 }
 
+export interface RecordOutcome {
+  runId: string | null;
+  posted: boolean;
+}
+
+/** Fehlerkatalog-Eintrag (`kido_core::CATALOGUE`). */
+export interface CatalogueItem {
+  code: string;
+  station: StationKind;
+  station_label: string;
+  kind: PenaltyKind;
+  label_de: string;
+}
+
 export type CloudEvent =
   | { type: "paired"; identity: CloudIdentity }
   | { type: "cleared" }
   | { type: "snapshotChanged"; snapshot: DisciplinePayload }
   | { type: "snapshotError"; message: string }
-  | { type: "resultPosted"; runId: string; status: RunStatus }
-  | { type: "resultPostFailed"; runId: string; message: string }
-  | { type: "failedPostsChanged"; failures: FailedPost[] };
+  | { type: "resultPosted"; run_id: string; status: RunStatus }
+  | { type: "resultPostFailed"; run_id: string; message: string }
+  | { type: "failedPostsChanged"; failures: FailedPost[] }
+  | { type: "divergenceChanged"; divergences: RunDivergence[] };
