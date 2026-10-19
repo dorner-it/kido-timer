@@ -37,8 +37,11 @@ jobs:
         # Pin both cargo-lambda and ziglang. Zig is what links the binary
         # against an older glibc compatible with Lambda's provided.al2023
         # runtime; pinning protects against an upstream regression breaking
-        # builds (mirrors the fms-monorepo workflow).
-        run: pip3 install 'cargo-lambda==1.7.0' 'ziglang==0.13.0.post1'
+        # builds (mirrors the fms-monorepo workflow). cargo-lambda >= 1.9.2
+        # is required since Rust 1.99, which passes
+        # --fix-cortex-a53-843419 to the aarch64 linker; older versions
+        # hand it to zig, which rejects it.
+        run: pip3 install 'cargo-lambda==1.9.2' 'ziglang==0.13.0.post1'
 
       - name: Build Lambda package
         working-directory: backend
