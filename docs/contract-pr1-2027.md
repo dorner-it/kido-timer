@@ -169,5 +169,6 @@ next review recomputes it — harmless, because it is display-only.
 ## Results (kido-core only in PR 1)
 
 `kido_core::scoring::compute_results` is implemented and tested in PR 1;
-the HTTP endpoint `GET /api/disciplines/{id}/results` follows in the
-results PR.
+the HTTP endpoint follows in the results PR (PR 4) as
+`GET /api/events/{id}/disciplines/{discipline_id}/results` (nested like
+every other organizer route; shape in `docs/api.md` § Results).

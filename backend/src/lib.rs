@@ -7,5 +7,6 @@ pub mod db;
 pub mod error;
 pub mod export;
 pub mod models;
+pub mod results;
 pub mod routes;
 pub mod state;

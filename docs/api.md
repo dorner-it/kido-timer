@@ -146,6 +146,71 @@ Organizer review is unchanged: approve / reject / `POST /api/events/{id}/runs/{r
 
 Source: `kido_core::catalogue::CATALOGUE`, in sheet order.
 
+## Results (Ergebnisse)
+
+`GET /api/events/{id}/disciplines/{discipline_id}/results` (organizer; `404` for unknown event/discipline, `401` without session)
+
+Computed on every request by `kido_core::scoring::compute_results` (rules: [concept §5](./concept-gruppenstafette-2027.md#5-scoring-backend), `crates/kido-core/src/scoring.rs`). Mapping of stored rows (`backend/src/results.rs::build_scoring_input`):
+
+- `completed` = `run.status == "completed"`; pending/active/cancelled runs are ignored.
+- measured time = `original_time_ms` (with `time_source = handstopp` this already holds the hand-time mean). **`correction_ms` is never added** — the total is always measured + 15 s × counting SZ.
+- Penalties of all statuses are passed; `pending` and `approved` count (pending → `provisional`), `rejected` does not.
+- Teams = entries of the discipline with a `wg`. Entries with `wg: null` (legacy rows) are not ranked and listed in `missing_wg`.
+- Tagessieger ages = completed years on the event date, over the counting run's `lineup` (fallback: whole roster → `lineup_fallback: true`).
+
+```jsonc
+{
+  "event": { "id": "…", "name": "Kreisausscheid", "date": "2027-06-12", "location": "Musterstadt" },
+  "discipline": { "id": "…", "name": "Gruppenstafette", "mode": "gruppenstaffette" },
+  "generated_at": "2027-06-12T14:03:11.512Z",
+  "provisional": true,                 // any ranking row or Tagessieger row is provisional
+  "wg_rankings": [                     // WG1 … WG5, only WGs with at least one entry
+    {
+      "wg": "wg2", "wg_label": "WG2", "wg_label_de": "Jungen bis 14",
+      "rows": [                        // ranked (by place, start number), then all_invalid, then not_started
+        {
+          "team_id": "…", "team_name": "FF Musterdorf", "start_number": 1,
+          "place": 1,                  // all_invalid: shared last place (= ranked + 1); not_started: null ("n.a.")
+          "status": "ranked",          // ranked | all_invalid | not_started
+          "best_run_id": "…", "best_total_ms": 45000,   // null unless ranked
+          "provisional": false,
+          "runs": [                    // completed runs only, by run_number
+            {
+              "run_id": "…", "run_number": 1, "lane": 1,
+              "time_source": "handstopp", "hand_time_1_ms": 44990, "hand_time_2_ms": 45010,
+              "measured_ms": 45000,    // original_time_ms
+              "sz_count": 0, "fv_count": 0,
+              "total_ms": 45000,       // measured + 15 s × SZ; null when invalid
+              "valid": true,
+              "invalid_reason": null,  // fehlversuch | no_time
+              "provisional": false,
+              "is_best": true          // the counting run
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tagessieger": [                     // by place, then start number; teams without a valid run are left out
+    {
+      "place": 1, "team_id": "…", "team_name": "FF Musterdorf", "start_number": 1,
+      "wg": "wg2", "wg_label": "WG2",
+      "run_id": "…", "run_number": 2,
+      "total_ms": 45000,               // Bestzeit
+      "ages": [12, 13],
+      "avg_age": 12.5,                 // rounded to 1 decimal (display)
+      "factor": 0.89,                  // 1 − 2·(18 − avg)/100, rounded to 4 decimals (display)
+      "gw_ms": 40050,                  // total × factor, exact integer math, rounded to 1/100 s
+      "lineup_fallback": false,        // true → "Kader statt Besetzung"
+      "provisional": false
+    }
+  ],
+  "missing_wg": [ { "team_id": "…", "team_name": "…", "start_number": 5 } ]
+}
+```
+
+`gw_ms` and the places are computed from the exact values, not from the rounded `avg_age` / `factor`.
+
 ## Judge app (station token)
 
 `GET /api/decider/{owner_sub}/{token}/state` adds
